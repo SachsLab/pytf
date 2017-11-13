@@ -3,7 +3,7 @@ from numpy.lib import stride_tricks
 import numpy as np
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 
-def create_time_idx(n_samp, args, create_indices=False):
+def create_time_idx(n_samp, args, create_indices=False, meshgrid=False):
     """
     All arguments provided to this function are related to each other for creating
     overlapping window of a given signal with the length 'nsamp'. This function takes
@@ -54,18 +54,28 @@ def create_time_idx(n_samp, args, create_indices=False):
         n_win = 1
         length = binsize
 
-    if overlap_factor in [0,1]:
-        idx = np.arange(n_win * length)
-    else:
-        idx = np.arange((n_win + 1) * length)
-
     args[0] = binsize
     args[1] = overlap_factor
     args[2] = hopsize
     args[3] = n_win
 
     if create_indices:
-        return stride_tricks.as_strided(idx, shape=(n_win, binsize), strides=(idx.strides[0]*hopsize, idx.strides[0])).copy()
+        if meshgrid:
+            x = np.arange(0, binsize)
+            y = np.arange(0, n_win)
+            index1, index2 = np.meshgrid(x, y)
+            index1 += np.atleast_2d(hopsize*np.arange(n_win)).T
+
+            idx1 = np.asarray(index1, dtype=np.int64)
+            idx2 = np.asarray(index2, dtype=np.int64)
+            return idx1, idx2
+
+        else:
+            if overlap_factor in [0,1]:
+                idx = np.arange(n_win * length)
+            else:
+                idx = np.arange((n_win + 1) * length)
+            return stride_tricks.as_strided(idx, shape=(n_win, binsize), strides=(idx.strides[0]*hopsize, idx.strides[0])).copy()
 
 def stft(x, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, window='hamming', **kwargs):
     """
@@ -98,6 +108,10 @@ def stft(x, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, window=
     n_ch, n_samp = x.shape
 
     n_win = None
+
+    binsize = binsize if win_idx is None else win_idx.shape[-1]
+    hopsize = hopsize if win_idx is None else win_idx[1,0]
+
     args = [binsize, overlap_factor, hopsize, n_win]
     if win_idx is None:
         win_idx = create_time_idx(n_samp, args, create_indices=True)
@@ -109,7 +123,7 @@ def stft(x, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, window=
     win_ = get_window(window, binsize)
 
     length = hopsize if hopsize else binsize
-    if overlap_factor in [0, 1]:
+    if overlap_factor in [0,1]:
         _x = np.zeros((n_ch, n_win * length))
     else:
         _x = np.zeros((n_ch, (n_win + 1) * length))
@@ -120,7 +134,7 @@ def stft(x, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, window=
 
     return X
 
-def istft(X, nsamp=None, win_idx=None, binsize=None, overlap_factor=.5, nfreqs=1, window='hamming', **kwargs):
+def istft(X, nsamp=None, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, nfreqs=1, window='hamming', **kwargs):
     """
     Inverse STFT.
 
@@ -132,17 +146,27 @@ def istft(X, nsamp=None, win_idx=None, binsize=None, overlap_factor=.5, nfreqs=1
     -------
     x: ndarray, (n_ch x n_fr x n_samp)
     """
+
     if X.ndim == 3: # add a n_fr dimension
         X = X[:,:,np.newaxis,:]
 
-    kwargs['n'] = binsize if binsize is not None else None
-    x_ = irfft(X, **kwargs)
+    n_win = None
+
+    if win_idx is None:
+        binsize = binsize
+        hopsize = binsize * (1 - overlap_factor) if hopsize is None else hopsize
+    else:
+        binsize = win_idx.shape[-1]
+        hopsize = win_idx[1,0]
+        overlap_factor = hopsize / binsize
+
+    x_ = irfft(X, n=binsize, axis=-1, planner_effort='FFTW_ESTIMATE')
 
     _nch, _nwin, _nfreqs, _bin = x_.shape
-    binsize = _bin if binsize is None else binsize
-    nfreqs = _nfreqs if nfreqs is None else nfreqs
 
-    x = np.zeros((_nch, _nfreqs, int(_nwin * binsize)))
+    # Reconstructing the signal using overlap-add
+    x = np.zeros((_nch, _nfreqs, _nwin * binsize))
+    overlap_factor = .5
     for ix in range(_nwin):
         jx = (1-overlap_factor) * ix
         if int((jx+1)*binsize) <= binsize * _nwin * (1-overlap_factor):
