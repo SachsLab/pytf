@@ -2,6 +2,9 @@ from scipy.signal import get_window
 from numpy.lib import stride_tricks
 import numpy as np
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
+# Authors : David C.C. Lu <davidlu89@gmail.com>
+#
+# License : BSD (3-clause)
 
 def create_time_idx(n_samp, args, create_indices=False, meshgrid=False):
     """

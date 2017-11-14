@@ -8,17 +8,20 @@ from __future__ import division
 from copy import deepcopy
 
 import numpy as np
-from scipy.signal import firwin
-import pyfftw.interfaces.numpy_fft as fft
-from . import stft
+from scipy.signal import get_window
+from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 
+from . import stft
+from .tools import (get_center_frequencies, get_frequency_of_interests, create_filter, reshape_data)
+from .utilities.parallel import Parallel
 class FilterBank(object):
 
-    def __init__(self, nch, nsamp, binsize=1024, overlap_factor=.5, hopsize=None,
-                 bw=None, cf=None, foi=None, order=None, sfreq=None):
+    def __init__(self, nch, nsamp, binsize=1024, overlap_factor=.5, hopsize=None, decimate_by=1,
+                 bw=None, cf=None, foi=None, order=None, sfreq=None, nprocs=1):
 
+        self.decimate_by = decimate_by
         # Organize data
-        self.nch, self.nsamp = nch, nsamp
+        self.nch, self.nsamp = int(nch), int(nsamp)
 
         # Create indices for overlapping window
         self.binsize = binsize
@@ -51,7 +54,17 @@ class FilterBank(object):
         self.time = (np.arange(self.win_idx[-1,-1]+1)[self.win_idx] - self.binsize//2) / self.sfreq
         self.time_ix = (np.arange(self.win_idx[-1,-1]+1)[self.win_idx] - self.binsize//2)
 
-    def analysis(self, x, nsamp=None, filt=False, window='hanning', domain='freq', decimate_by=1, **kwargs):
+        self.nprocs = nprocs
+        if self.nprocs > 1:
+            self.pfunc = Parallel(self._fft_procs,
+                         nprocs=self.nprocs, axis=1,
+                         ins_shape= [(self.nch, self.nsamp),self.win_idx.shape], ins_dtype=[np.float32, np.int32],
+                         out_shape= (self.nch, self.win_idx.shape[0], self.nfreqs, self.binsize // self.decimate_by), out_dtype=np.complex64)
+
+    def kill(self, opt=None): # kill the multiprocess
+        self.pfunc.kill(opt=opt)
+
+    def analysis(self, x, nsamp=None, filt=False, window='hanning', domain='time', decimate_by=1, **kwargs):
         """
         Generate the analysis bank.
 
@@ -78,19 +91,21 @@ class FilterBank(object):
         nsamp = nsamp // decimate_by
         fftsize = self.binsize // decimate_by
 
-        X = stft.stft(x, win_idx=self.win_idx, window=window, **kwargs) / decimate_by
-        X_ = np.zeros((self.nch, self.nwin, self.nfreqs, fftsize//2), dtype=np.complex64)
-        if filt:
-            X_[:,:,self.idx2,self.idx1] = X[:,:,self.idx1] * self.filts[:,self.fidx][:,np.newaxis,:]
-        else:
-            X_[:,:,self.idx2,self.idx1] = X[:,:,self.idx1]
+        func = self.pfunc.result if self.nprocs > 1 else self._fft_procs
+        x_ = func(x, self.win_idx, nsamp=nsamp, binsize=fftsize, window=window, filt=filt, domain=domain, decimate_by=decimate_by, **kwargs)
 
-        if domain == 'freq':
-            return X_
-        elif domain == 'time':
-            return stft.istft(X_, nsamp=nsamp, binsize=fftsize, \
-                              overlap_factor=self.overlap_factor, \
-                              axis=-1, planner_effort='FFTW_ESTIMATE')
+        # Reconstructing the signal using overlap-add
+        binsize = fftsize
+        _x = np.zeros((self.nch, self.nfreqs, self.nwin * binsize))
+        for ix in range(self.nwin):
+            jx = (1-self.overlap_factor) * ix
+            if int((jx+1)*binsize) <= binsize * self.nwin * (1-self.overlap_factor):
+                _x[:,:,int(jx*binsize):int((jx+1)*binsize)] += x_[:,ix,:,:]
+
+        if nsamp is not None:
+            return _x[:,:,binsize//2:nsamp+binsize//2]
+        else:
+            return _x
 
     def synthesis(self, X, **kwargs):
         """
@@ -99,6 +114,24 @@ class FilterBank(object):
         Frequency band reconstruction of the signal.
         """
         return stft.istft(X, nsamp=self.analysis_size, binsize=self.binsize, overlap_factor=self.overlap_factor, **kwargs)
+
+    def _fft_procs(self, x, win_idx, nsamp=None, binsize=1024, filt=False, domain='time', decimate_by=1, axis=-1, **kwargs):
+        X = stft.stft(x, win_idx=win_idx, **kwargs) / decimate_by
+
+        _nwin, _nbins = win_idx.shape
+
+        X_ = np.zeros((self.nch, _nwin, self.nfreqs, binsize//2), dtype=np.complex64)
+
+        if filt:
+            X_[:,:,self.idx2,self.idx1] = X[:,:,self.idx1] * self.filts[:,self.fidx][:,np.newaxis,:]
+        else:
+            X_[:,:,self.idx2,self.idx1] = X[:,:,self.idx1]
+
+        if domain == 'freq':
+            return X_
+        elif domain == 'time':
+            x_ = irfft(X_, n=binsize, axis=-1, planner_effort='FFTW_ESTIMATE')
+            return x_
 
     @property
     def foi(self):
@@ -133,7 +166,7 @@ class FilterBank(object):
         Create the prototype filter, which is the only filter require for windowing in the frequency
         domain of the signal. This filter is a lowpass filter.
         """
-        _, filts = self.create_filter(order, f_cut, fs/2., N, shift=True)
+        _, filts = create_filter(order, f_cut, fs/2., N, shift=True)
 
         return filts
 
@@ -173,85 +206,7 @@ class FilterBank(object):
             raise ValueError("Must enter one of the following arguments: 'cf', 'bw', 'fois.")
 
         if self.foi is None:
-            self._foi = self.get_frequency_of_interests(self.center_f, self.bandwidth)
+            self._foi = get_frequency_of_interests(self.center_f, self.bandwidth)
 
         if self.center_f is None or self.bandwidth is None:
-            self._center_f, self._bandwidth = self.get_center_frequencies(self.foi)
-
-    @staticmethod
-    def get_center_frequencies(fois):
-        """
-        Provide an array-like frequencies of interests (foi), return the center frequencies (cf) and the bandwidth (bw).
-        The units must be consistant, either all in Hz or all normalized.
-        """
-        foi = np.asarray(fois)
-        if fois.shape[0] == 2:
-            fois = fois.T
-
-        cf = np.atleast_2d(fois.mean(axis=-1)).T
-        bw = np.diff(fois, axis=-1)
-
-        if not np.diff(bw):
-            bw = float(bw.mean())
-
-        return cf, bw
-
-    @staticmethod
-    def get_frequency_of_interests(cf, bw):
-        """
-        Provide an array-like center frequencies (cf) and bandwidth(s) (bw), return an array of frequency bands.
-        """
-        cf = np.asarray(cf)
-        bw = np.asarray(bw)
-        if cf.ndim == 1:
-            cf = np.atleast_2d(cf).T
-        else:
-            if cf.shape[1] == cf.size:
-                cf = cf.T
-
-        bw = bw * np.ones((cf.size, 2))
-        bw[:,0] *= -.5
-        bw[:,1] *= .5
-
-        return cf + bw
-
-    @staticmethod
-    def create_filter(order, cutoff, nyquist, N, ftype='fir', output='freq', shift=True):
-        """
-        Create a prototype filter.
-        """
-        if order > N:
-            raise ValueError("The order of the filter should not be longer than the length for FFT (binsize).")
-
-        if cutoff >= nyquist:
-            raise ValueError("The cutoff frequency must be at least 2 times smaller than the Nyquist rate.")
-
-        h = firwin(order, cutoff, nyq=nyquist)
-
-        if output == 'freq':
-            w = fft.fftfreq(N)
-            w *= (nyquist*2)
-
-            H = fft.fft(h, n=N, axis=-1, planner_effort='FFTW_ESTIMATE')
-
-            if shift:
-                return fft.fftshift(w), fft.fftshift(H)
-            else:
-                return w, H
-
-        else:
-            return h
-
-    @staticmethod
-    def _reshape_data(data, axis=-1):
-
-        if data.ndim > 2 or axis > 1:
-            raise ValueError("The data should only be in 2 dimensional. \
-                    The support for 3 dimensional have not been implemented yet.")
-        if data.ndim == 1:
-            data = np.atleast_2d(data)
-
-        if axis != 0:
-            return data
-        else:
-            return data.T
+            self._center_f, self._bandwidth = get_center_frequencies(self.foi)
