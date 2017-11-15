@@ -14,8 +14,10 @@ from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 from . import stft
 from .tools import (get_center_frequencies, get_frequency_of_interests, create_filter, reshape_data)
 from ..utilities.parallel import Parallel
-class FilterBank(object):
 
+class FilterBank(object):
+    """
+    """
     def __init__(self, nch, nsamp, binsize=1024, overlap_factor=.5, hopsize=None, decimate_by=1,
                  bw=None, cf=None, foi=None, order=None, sfreq=None, nprocs=1):
 
@@ -86,7 +88,6 @@ class FilterBank(object):
         kwargs:
             The key-word arguments for pyfftw.
         """
-
         nsamp = x.shape[-1] if nsamp is None else nsamp
         nsamp = nsamp // self.decimate_by
 
