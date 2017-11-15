@@ -13,7 +13,7 @@ from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 
 from . import stft
 from .tools import (get_center_frequencies, get_frequency_of_interests, create_filter, reshape_data)
-from .utilities.parallel import Parallel
+from ..utilities.parallel import Parallel
 class FilterBank(object):
 
     def __init__(self, nch, nsamp, binsize=1024, overlap_factor=.5, hopsize=None, decimate_by=1,
@@ -51,20 +51,20 @@ class FilterBank(object):
         self.filts = self._create_prototype_filter(self.order, self.bandwidth/2., self.sfreq, self.binsize)
         self.filts = np.atleast_2d(self.filts)
 
-        self.time = (np.arange(self.win_idx[-1,-1]+1)[self.win_idx] - self.binsize//2) / self.sfreq
-        self.time_ix = (np.arange(self.win_idx[-1,-1]+1)[self.win_idx] - self.binsize//2)
+        self.binsize_dec, self.hopsize_dec, self.nsamp_dec = self.binsize // self.decimate_by, self.hopsize // self.decimate_by, self.nsamp // self.decimate_by
 
         self.nprocs = nprocs
         if self.nprocs > 1:
             self.pfunc = Parallel(self._fft_procs,
                          nprocs=self.nprocs, axis=1,
                          ins_shape= [(self.nch, self.nsamp),self.win_idx.shape], ins_dtype=[np.float32, np.int32],
-                         out_shape= (self.nch, self.win_idx.shape[0], self.nfreqs, self.binsize // self.decimate_by), out_dtype=np.complex64)
+                         out_shape= (self.nch, self.win_idx.shape[0], self.nfreqs, self.binsize_dec), out_dtype=np.complex64,
+                         binsize=self.binsize_dec, filt=True, domain='time', planner_effort='FFTW_ESTIMATE', window='hanning')
 
     def kill(self, opt=None): # kill the multiprocess
         self.pfunc.kill(opt=opt)
 
-    def analysis(self, x, nsamp=None, filt=False, window='hanning', domain='time', decimate_by=1, **kwargs):
+    def analysis(self, x, nsamp=None, filt=False, window='hanning', domain='time', **kwargs):
         """
         Generate the analysis bank.
 
@@ -88,22 +88,21 @@ class FilterBank(object):
         """
 
         nsamp = x.shape[-1] if nsamp is None else nsamp
-        nsamp = nsamp // decimate_by
-        fftsize = self.binsize // decimate_by
+        nsamp = nsamp // self.decimate_by
 
         func = self.pfunc.result if self.nprocs > 1 else self._fft_procs
-        x_ = func(x, self.win_idx, nsamp=nsamp, binsize=fftsize, window=window, filt=filt, domain=domain, decimate_by=decimate_by, **kwargs)
+        x_ = func(x, self.win_idx, binsize=self.binsize_dec, window=window, filt=filt, domain=domain, **kwargs)
+        x_ = np.asarray(x_, dtype=np.float32)
 
         # Reconstructing the signal using overlap-add
-        binsize = fftsize
-        _x = np.zeros((self.nch, self.nfreqs, self.nwin * binsize))
+        _x = np.zeros((self.nch, self.nfreqs, self.nwin * self.binsize_dec))
         for ix in range(self.nwin):
             jx = (1-self.overlap_factor) * ix
-            if int((jx+1)*binsize) <= binsize * self.nwin * (1-self.overlap_factor):
-                _x[:,:,int(jx*binsize):int((jx+1)*binsize)] += x_[:,ix,:,:]
+            if int((jx+1)*self.binsize_dec) <= self.binsize_dec * self.nwin * (1-self.overlap_factor):
+                _x[:,:,int(jx*self.binsize_dec):int((jx+1)*self.binsize_dec)] += x_[:,ix,:,:]
 
         if nsamp is not None:
-            return _x[:,:,binsize//2:nsamp+binsize//2]
+            return _x[:,:,self.binsize_dec//2:nsamp+self.binsize_dec//2]
         else:
             return _x
 
@@ -113,10 +112,10 @@ class FilterBank(object):
         Full Reconstruction of the signal.
         Frequency band reconstruction of the signal.
         """
-        return stft.istft(X, nsamp=self.analysis_size, binsize=self.binsize, overlap_factor=self.overlap_factor, **kwargs)
+        return stft.istft(X, nsamp=self.binsize_dec, binsize=self.binsize, overlap_factor=self.overlap_factor, **kwargs)
 
-    def _fft_procs(self, x, win_idx, nsamp=None, binsize=1024, filt=False, domain='time', decimate_by=1, axis=-1, **kwargs):
-        X = stft.stft(x, win_idx=win_idx, **kwargs) / decimate_by
+    def _fft_procs(self, x, win_idx, binsize=1024, filt=False, domain='time', axis=-1, **kwargs):
+        X = stft.stft(x, win_idx=win_idx, **kwargs) / self.decimate_by
 
         _nwin, _nbins = win_idx.shape
 

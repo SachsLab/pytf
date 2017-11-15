@@ -41,6 +41,7 @@ def create_time_idx(n_samp, args, create_indices=False, meshgrid=False):
     if hopsize is not None:
         _overlap_factor = hopsize / binsize
         if overlap_factor != _overlap_factor:
+            print(_overlap_factor, hopsize, binsize)
             raise ValueError("The 'overlap_factor' calculated from hopsize/binsize does not match the input.")
 
     if overlap_factor in [0, 1] and binsize != hopsize != n_samp:
@@ -113,11 +114,13 @@ def stft(x, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, window=
     n_win = None
 
     binsize = binsize if win_idx is None else win_idx.shape[-1]
-    hopsize = hopsize if win_idx is None else win_idx[1,0]
+    hopsize = hopsize if win_idx is None else abs(win_idx[0,-1] - win_idx[1,0])+1
 
     args = [binsize, overlap_factor, hopsize, n_win]
     if win_idx is None:
         win_idx = create_time_idx(n_samp, args, create_indices=True)
+        # n_win = win_idx.shape[0]
+        # hopsize = 0
     else:
         create_time_idx(n_samp, args)
 
