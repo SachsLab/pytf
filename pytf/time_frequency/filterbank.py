@@ -12,7 +12,8 @@ from scipy.signal import get_window
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 
 from . import stft
-from .tools import (get_center_frequencies, get_frequency_of_interests, create_filter, reshape_data)
+from .filter import (create_filter)
+from .tools import (get_center_frequencies, get_frequency_of_interests, reshape_data)
 from ..utilities.parallel import Parallel
 
 class FilterBank(object):
@@ -88,11 +89,13 @@ class FilterBank(object):
         kwargs:
             The key-word arguments for pyfftw.
         """
+        kwargs['window'] = window
+        
         nsamp = x.shape[-1] if nsamp is None else nsamp
         nsamp = nsamp // self.decimate_by
 
         func = self.pfunc.result if self.nprocs > 1 else self._fft_procs
-        x_ = func(x, self.win_idx, binsize=self.binsize_dec, window=window, filt=filt, domain=domain, **kwargs)
+        x_ = func(x, self.win_idx, filt=filt, domain=domain, **kwargs)
         x_ = np.asarray(x_, dtype=np.float32)
 
         # Reconstructing the signal using overlap-add
@@ -107,30 +110,35 @@ class FilterBank(object):
         else:
             return _x
 
-    def synthesis(self, X, **kwargs):
+    def synthesis(self, x, **kwargs):
         """
-        Construct using iSTFT.
-        Full Reconstruction of the signal.
-        Frequency band reconstruction of the signal.
+        TODO: Reconstruct the signal from the analysis bank.
         """
-        return stft.istft(X, nsamp=self.binsize_dec, binsize=self.binsize, overlap_factor=self.overlap_factor, **kwargs)
+        return
 
-    def _fft_procs(self, x, win_idx, binsize=1024, filt=False, domain='time', axis=-1, **kwargs):
+    def _fft_procs(self, x, win_idx, filt=False, domain='time', axis=-1, **kwargs):
+        """
+        STFT break down of the signal, and filter them with a defined filter.
+
+        Paramters:
+        ----------
+        x: ndarray (nch x nsamp)
+            The signal to be analyzed.
+
+        win_idx: ndarray (nwin x binsize//2)
+        """
         X = stft.stft(x, win_idx=win_idx, **kwargs) / self.decimate_by
 
         _nwin, _nbins = win_idx.shape
 
-        X_ = np.zeros((self.nch, _nwin, self.nfreqs, binsize//2), dtype=np.complex64)
+        X_ = np.zeros((self.nch, _nwin, self.nfreqs, self.binsize_dec//2), dtype=np.complex64)
 
-        if filt:
-            X_[:,:,self.idx2,self.idx1] = X[:,:,self.idx1] * self.filts[:,self.fidx][:,np.newaxis,:]
-        else:
-            X_[:,:,self.idx2,self.idx1] = X[:,:,self.idx1]
+        X_[:,:,self.idx2,self.idx1] = X[:,:,self.idx1] * self.filts[:,self.fidx][:,np.newaxis,:] if filt else X[:,:,self.idx1]
 
         if domain == 'freq':
             return X_
         elif domain == 'time':
-            x_ = irfft(X_, n=binsize, axis=-1, planner_effort='FFTW_ESTIMATE')
+            x_ = irfft(X_, n=self.binsize_dec, axis=-1, planner_effort='FFTW_ESTIMATE')
             return x_
 
     @property

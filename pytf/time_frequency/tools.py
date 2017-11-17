@@ -7,8 +7,21 @@ import pyfftw.interfaces.numpy_fft as fft
 
 def get_center_frequencies(fois):
     """
-    Provide an array-like frequencies of interests (foi), return the center frequencies (cf) and the bandwidth (bw).
-    The units must be consistant, either all in Hz or all normalized.
+    Convert an array of frequency bands into center frequencies and a bandwidth.
+    TODO: Support for varying bandwidths.
+    Parameters:
+    -----------
+    fois: ndarray, (nfreq x 2)
+        An array of frequency bands of interents. Each row consists of upper and lower
+        bound of frequencies. The unit for frequencies must be consistant with the sampling rate.
+
+    Return:
+    -------
+    cf: ndarray, (nfreqs x 1)
+        An array of center frequencies corresponding to the fois.
+
+    bw: float
+        The bandwidth. The width between the upper and lower cutoff frequencies.
     """
     foi = np.asarray(fois)
     if fois.shape[0] == 2:
@@ -16,15 +29,28 @@ def get_center_frequencies(fois):
 
     cf = np.atleast_2d(fois.mean(axis=-1)).T
     bw = np.diff(fois, axis=-1)
-
-    if not np.diff(bw):
-        bw = float(bw.mean())
-
-    return cf, bw
+    bw = bw[0] if np.diff(bw) else bw.mean()
+    print(bw)
+    return cf, float(bw)
 
 def get_frequency_of_interests(cf, bw):
     """
-    Provide an array-like center frequencies (cf) and bandwidth(s) (bw), return an array of frequency bands.
+    Convert an array of center frequencies and a bandwidth into an array of frequency bands.
+    TODO: Support for varying bandwidths.
+    Parameters:
+    -----------
+    cf: ndarray, (nfreqs x 1)
+        An array of center frequencies corresponding to the fois.
+
+    bw: float
+        The bandwidth. The width between the upper and lower cutoff frequencies.
+
+    Returns:
+    --------
+    fois: ndarray, (nfreq x 2)
+        An array of frequency bands of interents. Each row consists of upper and lower
+        bound of frequencies. The unit for frequencies must be consistant with the sampling rate.
+
     """
     cf = np.asarray(cf)
     bw = np.asarray(bw)
@@ -40,35 +66,21 @@ def get_frequency_of_interests(cf, bw):
 
     return cf + bw
 
-def create_filter(order, cutoff, nyquist, N, ftype='fir', output='freq', shift=True):
+def reshape_data(data):
     """
-    Create a prototype filter.
+    Reshaping the data such that the data has the shape of (nch x nsamp).
+
+    Parameters:
+    -----------
+    data: ndarray
+        The data of interest. It can currenly be 1d or 2d ndarray.
+
+    Returns:
+    --------
+    data: ndarray
+        The reshaped data.
     """
-    if order > N:
-        raise ValueError("The order of the filter should not be longer than the length for FFT (binsize).")
-
-    if cutoff >= nyquist:
-        raise ValueError("The cutoff frequency must be at least 2 times smaller than the Nyquist rate.")
-
-    h = firwin(order, cutoff, nyq=nyquist)
-
-    if output == 'freq':
-        w = fft.fftfreq(N)
-        w *= (nyquist*2)
-
-        H = fft.fft(h, n=N, axis=-1, planner_effort='FFTW_ESTIMATE')
-
-        if shift:
-            return fft.fftshift(w), fft.fftshift(H)
-        else:
-            return w, H
-
-    else:
-        return h
-
-def reshape_data(data, axis=-1):
-
-    if data.ndim > 2 or axis > 1:
+    if data.ndim > 2:
         raise ValueError("The data should only be in 2 dimensional. \
                 The support for 3 dimensional have not been implemented yet.")
     if data.ndim == 1:

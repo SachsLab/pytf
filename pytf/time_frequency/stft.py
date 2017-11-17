@@ -6,6 +6,39 @@ from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 #
 # License : BSD (3-clause)
 
+def check_winsize(binsize, overlap_factor=None, hopsize=None):
+    """
+    Ensure all parameters for defining the windowing size of the signal aligns.
+
+    Parameters:
+    -----------
+    binsize: int
+        The length of chunk size.
+
+    overlap_factor: float
+        The ratio of overlapping between chuncks.
+
+    hopsize: int
+        The number of sample it takes to hop between rows.
+
+    Retruns:
+    --------
+    The same as the input arguments, but altered values if necessary.
+    """
+    if overlap_factor is None and hopsize is None:
+        raise ValueError("At least one of 'overlap_factor' or 'hopsize' has to have a value.")
+
+    overlap_factor = hopsize / binsize if overlap_factor is None else overlap_factor
+    hopsize = int(binsize * (1 - overlap_factor)) if hopsize is None else hopsize
+
+    if overlap_factor in [0, 1]:
+        hopsize = 0 if overlap_factor else binsize
+
+    if np.abs(round(overlap_factor - hopsize / binsize, 3)) >= 5E-2:
+        raise ValueError("The 'overlap_factor' calculated from hopsize/binsize does not match the input.")
+
+    return binsize, overlap_factor, hopsize
+
 def create_time_idx(n_samp, args, create_indices=False, meshgrid=False):
     """
     All arguments provided to this function are related to each other for creating
@@ -38,17 +71,11 @@ def create_time_idx(n_samp, args, create_indices=False, meshgrid=False):
     """
 
     binsize, overlap_factor, hopsize, n_win = args
-    if hopsize is not None:
-        _overlap_factor = hopsize / binsize
-        if overlap_factor != _overlap_factor:
-            print(_overlap_factor, hopsize, binsize)
-            raise ValueError("The 'overlap_factor' calculated from hopsize/binsize does not match the input.")
 
-    if overlap_factor in [0, 1] and binsize != hopsize != n_samp:
+    if overlap_factor in [0, 1]:
         binsize = n_samp
-        hopsize = 0 if overlap_factor else binsize
-    else:
-        hopsize = int(binsize * (1 - overlap_factor)) if hopsize is None else hopsize
+
+    binsize, overlap_factor, hopsize = check_winsize(binsize, overlap_factor, hopsize)
 
     if hopsize:
         n_win = n_samp / hopsize
@@ -91,13 +118,20 @@ def stft(x, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, window=
         Multi-channel signal.
 
     win_idx: default None
-        Create the indices of overlapping window.
+        The indices of overlapping window. If None, create the indices within the function.
 
     binsize: int
         Window size for processing FFT on.
 
     overlap_factor: float
         The percentage of overlapping between consecutive windows.
+
+    hopsize: int
+        The number of samples to jump over for the start of the next window.
+
+    window: string, default 'hamming'
+        The popular window types commonly used for shaping a signal in DSP for reducing
+        artifacts introduced in the time-frequency transformations.
 
     Return:
     -------
@@ -140,7 +174,7 @@ def stft(x, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, window=
 
     return X
 
-def istft(X, nsamp=None, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, nfreqs=1, window='hamming', **kwargs):
+def istft(X, nsamp=None, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, **kwargs):
     """
     Inverse STFT.
 
