@@ -25,7 +25,7 @@ class Counter(object):
 
 class Parallel(object):
     function = {}
-    def __init__(self, func, *args, ins_shape=None, ins_dtype=None, out_shape=None, out_dtype=None,\
+    def __init__(self, func, ins_shape=None, ins_dtype=None, out_shape=None, out_dtype=None,\
                         nprocs=1, axis=0, flag=0, **kwargs):
         self.nprocs = nprocs
 
