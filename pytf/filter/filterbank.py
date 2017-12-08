@@ -1,50 +1,45 @@
 from __future__ import division
 """A module for filter bank.
-
 """
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
 # License : BSD (3-clause)
-from copy import deepcopy
-
 import numpy as np
 from scipy.signal import get_window
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 
-from . import stft
-from .filter import (create_filter)
-from .tools import (get_center_frequencies, get_frequency_of_interests, reshape_data)
+from .filter import (create_filter, get_center_frequencies, get_frequency_of_interests, get_all_frequencies)
+from ..reconstruction.overlap import (overlap_add)
+from ..time_frequency.stft import (_check_winsize, stft)
 from ..utilities.parallel import Parallel
+
+def _is_uniform_distributed_cf(cf):
+    """
+    Check if the provided center frequencies are uniformly distributed.
+    """
+    return np.any(np.diff(np.diff(cf))!=0)
 
 class FilterBank(object):
     """
+
     """
-    def __init__(self, nch, nsamp, binsize=1024, overlap_factor=.5, hopsize=None, decimate_by=1,
-                 bw=None, cf=None, foi=None, order=None, sfreq=None, nprocs=0):
+    # __slots__ = ['center_frequencies', 'bandwidth', 'frequency_bands', 'sampling_rate',\
+    #              'binsize', 'overlap_factor', 'hopsize', 'decimate_by']
+
+    def __init__(self, binsize=1024, decimate_by=1,
+                 bw=None, cf=None, foi=None, order=None, sfreq=None, \
+                 **kw_pfunc):
 
         self.decimate_by = decimate_by
-        # Organize data
-        self.nch, self.nsamp = int(nch), int(nsamp)
 
         # Create indices for overlapping window
         self.binsize = binsize
-        self.hopsize = hopsize
-        self.overlap_factor = overlap_factor
-        self.nwin = None
-        args = [self.binsize, self.overlap_factor, self.hopsize, self.nwin]
-        self.win_idx = stft.create_time_idx(self.nsamp, args, create_indices=True)
-        self.binsize, self.overlap_factor, self.hopsize, self.nwin = args
 
         # The decimated sample size
         self.binsize_ = self.binsize // self.decimate_by
-        self.hopsize_ = self.hopsize // self.decimate_by
-        self.nsamp_ = self.nsamp // self.decimate_by
 
         # Organize frequencies
-        self._foi = foi
-        self._center_f = cf
-        self._bandwidth = bw
-        self._get_all_frequencies()
+        self._center_f, self._bandwidth, self._foi = get_all_frequencies(cf, bw, foi)
 
         self._nfreqs = self.foi.shape[0]
 
@@ -57,21 +52,20 @@ class FilterBank(object):
         # Create a prototype filter
         self._order = order
         self.filts = self._create_prototype_filter(self.order, self.bandwidth/2., self.sfreq, self.binsize)
-        self.filts = np.atleast_2d(self.filts)
 
         # Initializing for multiprocessing
+        kw_pfunc = ['nprocs', 'in_shape', 'out_shape', '_fft_procs_kwargs']
         self.nprocs = nprocs
-        if self.nprocs >= 1:
-            self.pfunc = Parallel(self._fft_procs,
-                         nprocs=self.nprocs, axis=1,
-                         ins_shape= [(self.nch, self.nsamp),self.win_idx.shape], ins_dtype=[np.float32, np.int32],
-                         out_shape= (self.nch, self.win_idx.shape[0], self.nfreqs, self.binsize_), out_dtype=np.complex64,
-                         binsize=self.binsize_, filt=True, domain='time', window='hanning')
+        self.pfunc = Parallel(self._fft_procs,
+                     nprocs=self.nprocs, axis=1,
+                     ins_shape= [(self.nch, self.nsamp), self.win_idx.shape], ins_dtype=[np.float32, np.int32],
+                     out_shape= (self.nch, self.win_idx.shape[0], self.nfreqs, self.binsize_), out_dtype=np.complex64,
+                     binsize=self.binsize_, filt=True, domain='time', window='hanning')
 
     def kill(self, opt=None): # kill the multiprocess
         self.pfunc.kill(opt=opt)
 
-    def analysis(self, x, nsamp=None, filt=False, window='hanning', domain='time', **kwargs):
+    def analysis(self, x, nsamp=None, hilbert=False, **kwargs):
         """
         Generate the analysis bank.
 
@@ -93,28 +87,18 @@ class FilterBank(object):
         kwargs:
             The key-word arguments for pyfftw.
         """
-        kwargs['window'] = window
-        kwargs['domain'] = domain
-        kwargs['filt'] = filt
+        ndtype = np.complex64 if hilbert else np.float32
 
-        nsamp = x.shape[-1] if nsamp is None else nsamp
-        nsamp = nsamp // self.decimate_by
+        nsamp = x.shape[-1]
+        nsamp //= self.decimate_by
 
         func = self.pfunc.result if self.nprocs > 1 else self._fft_procs
-        x_ = func(x, self.win_idx, **kwargs)
-        x_ = np.asarray(x_, dtype=np.float32)
+        x_ = func(x, dtype=ndtype, **kwargs)
 
         # Reconstructing the signal using overlap-add
-        _x = np.zeros((self.nch, self.nfreqs, self.nwin * self.binsize_))
-        for ix in range(self.nwin):
-            jx = (1-self.overlap_factor) * ix
-            if int((jx+1)*self.binsize_) <= self.binsize_ * self.nwin * (1-self.overlap_factor):
-                _x[:,:,int(jx*self.binsize_):int((jx+1)*self.binsize_)] += x_[:,ix,:,:]
+        _x = overlap_add(x_, self.binsize_, overlap_factor=.5, dtype=ndtype)
 
-        if nsamp is not None:
-            return _x[:,:,self.binsize_//2:nsamp+self.binsize_//2]
-        else:
-            return _x
+        return _x[:,:,self.binsize_//2:nsamp+self.binsize_//2]
 
     def synthesis(self, x, **kwargs):
         """
@@ -122,33 +106,31 @@ class FilterBank(object):
         """
         return
 
-    def _fft_procs(self, x, win_idx, **kwargs):
+    def _fft_procs(self, x, window='hamming', filt=True, domain='freq', dtype=np.float32):
         """
-        STFT break down of the signal, and filter them with a defined filter.
+        FFT filtering using STFT on the signal.
 
         Paramters:
         ----------
         x: ndarray (nch x nsamp)
             The signal to be analyzed.
-
-        win_idx: ndarray (nwin x binsize//2)
         """
-        filt = kwargs.pop('filt')
-        domain = kwargs.pop('domain')
+        X = stft(x, binsize=self.binsize, window=window, axis=-1, planner_effort='FFTW_ESTIMATE') / self.decimate_by
+        X_ = np.zeros((self.nch, X.shape[1], self.nfreqs, self.binsize_//2), dtype=np.complex64)
 
-        X = stft.stft(x, win_idx=win_idx, axis=-1, planner_effort='FFTW_ESTIMATE', **kwargs) / self.decimate_by
+        X_[:,:,self.idx2,self.idx1] = X[:,:,self.idx1] * self.filts[self.fidx] if filt else X[:,:,self.idx1]
 
-        _nwin, _nbins = win_idx.shape
-
-        X_ = np.zeros((self.nch, _nwin, self.nfreqs, self.binsize_//2), dtype=np.complex64)
-
-        X_[:,:,self.idx2,self.idx1] = X[:,:,self.idx1] * self.filts[:,self.fidx][:,np.newaxis,:] if filt else X[:,:,self.idx1]
+        if dtype == np.float32:
+            _ifft = irfft
+        else:
+            X_[:,:,:,1:] *= 2
+            _ifft = ifft
 
         if domain == 'freq':
             return X_
+
         elif domain == 'time':
-            x_ = irfft(X_, n=self.binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
-            return x_
+            return _ifft(X_, n=self.binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
 
     @property
     def foi(self):
@@ -198,6 +180,7 @@ class FilterBank(object):
         self.fidx = np.zeros((self.nfreqs, int(self.bandwidth * 2 * self._int_phz)), dtype=np.int64)
         cf0 = self.binsize // 2
         for ix, f_ix in enumerate(fois_ix_):
+
             if f_ix[0] <= self.bandwidth:
                 l_bound = cf0 - int(self._int_phz * self.bandwidth // 4) - 1
             else:
@@ -214,16 +197,3 @@ class FilterBank(object):
         index1 += np.atleast_2d(fois_ix_[:,0]).T
         self.idx1 = np.asarray(index1, dtype=np.int64)
         self.idx2 = np.asarray(index2, dtype=np.int64)
-
-    def _get_all_frequencies(self):
-        """
-        Ensures all frequencies, fois, cf, and bw.
-        """
-        if (self.center_f, self.bandwidth, self.foi) is (None, None, None):
-            raise ValueError("Must enter one of the following arguments: 'cf', 'bw', 'fois.")
-
-        if self.foi is None:
-            self._foi = get_frequency_of_interests(self.center_f, self.bandwidth)
-
-        if self.center_f is None or self.bandwidth is None:
-            self._center_f, self._bandwidth = get_center_frequencies(self.foi)

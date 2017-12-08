@@ -1,12 +1,15 @@
-from scipy.signal import get_window
-from numpy.lib import stride_tricks
 import numpy as np
+from numpy.lib import stride_tricks
+
+from scipy.signal import get_window
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
+
+from ..reconstruction.overlap import overlap_add
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
 # License : BSD (3-clause)
 
-def check_winsize(binsize, overlap_factor=None, hopsize=None):
+def _check_winsize(binsize, overlap_factor=None, hopsize=None):
     """
     Ensure all parameters for defining the windowing size of the signal aligns.
 
@@ -39,43 +42,45 @@ def check_winsize(binsize, overlap_factor=None, hopsize=None):
 
     return binsize, overlap_factor, hopsize
 
-def create_time_idx(n_samp, args, create_indices=False, meshgrid=False):
+def stft(x, binsize=1024, overlap_factor=.5, hopsize=None, window='hamming', **kwargs):
     """
-    All arguments provided to this function are related to each other for creating
-    overlapping window of a given signal with the length 'nsamp'. This function takes
-    the input argument 'args', and update their values. The actual indices for creating
-    the window based on 'args' can be returned if 'create_indices = True'.
+    STFT, Short-Term Fourier Transform.
 
     Parameters:
     -----------
-    n_samp: int
-        The length of the total analysis sample size.
+    x: 2d-ndarray, (n_ch, n_samp)
+        Multi-channel signal.
 
-    args: list
-        This is a list object containing the following arguments:
-            binsize: int
-                The length of chunk size.
+    binsize: int
+        Window size for processing FFT on.
 
-            overlap_factor: float
-                The ratio of overlapping between chuncks.
-
-            hopsize: int
-                The number of sample it takes to hop between rows.
-
-    create_indices: bool
-        Flag for returning indices.
+    overlap_factor: float
+        The percentage of overlapping between consecutive windows.
 
     Return:
     -------
-    indices (optional)
+    X: ndarray, (n_ch, n_win, binsize // 2)
     """
+    # Sanity check
+    if not np.isrealobj(x):
+        raise ValueError("x is not a real valued array")
 
-    binsize, overlap_factor, hopsize, n_win = args
+    if x.ndim > 2:
+        raise ValueError("The dimension of the ndarray must be less than or equal to 2!")
 
-    if overlap_factor in [0, 1]:
+    x = np.atleast_2d(x)
+    n_ch, n_samp = x.shape
+    
+    if hopsize is not None:
+        _overlap_factor = hopsize / binsize
+        if overlap_factor != _overlap_factor:
+            raise ValueError("The 'overlap_factor' calculated from hopsize/binsize does not match the input.")
+
+    if overlap_factor in [0, 1] and binsize != hopsize != n_samp:
         binsize = n_samp
-
-    binsize, overlap_factor, hopsize = check_winsize(binsize, overlap_factor, hopsize)
+        hopsize = 0 if overlap_factor else binsize
+    else:
+        hopsize = int(binsize * (1 - overlap_factor)) if hopsize is None else hopsize
 
     if hopsize:
         n_win = n_samp / hopsize
@@ -85,84 +90,6 @@ def create_time_idx(n_samp, args, create_indices=False, meshgrid=False):
         n_win = 1
         length = binsize
 
-    args[0] = binsize
-    args[1] = overlap_factor
-    args[2] = hopsize
-    args[3] = n_win
-
-    if create_indices:
-        if meshgrid:
-            x = np.arange(0, binsize)
-            y = np.arange(0, n_win)
-            index1, index2 = np.meshgrid(x, y)
-            index1 += np.atleast_2d(hopsize*np.arange(n_win)).T
-
-            idx1 = np.asarray(index1, dtype=np.int64)
-            idx2 = np.asarray(index2, dtype=np.int64)
-            return idx1, idx2
-
-        else:
-            if overlap_factor in [0,1]:
-                idx = np.arange(n_win * length)
-            else:
-                idx = np.arange((n_win + 1) * length)
-            return stride_tricks.as_strided(idx, shape=(n_win, binsize), strides=(idx.strides[0]*hopsize, idx.strides[0])).copy()
-
-def stft(x, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, window='hamming', **kwargs):
-    """
-    STFT, Short-Term Fourier Transform.
-
-    Parameters:
-    -----------
-    x: 2d-ndarray, (n_ch x n_samp)
-        Multi-channel signal.
-
-    win_idx: default None
-        The indices of overlapping window. If None, create the indices within the function.
-
-    binsize: int
-        Window size for processing FFT on.
-
-    overlap_factor: float
-        The percentage of overlapping between consecutive windows.
-
-    hopsize: int
-        The number of samples to jump over for the start of the next window.
-
-    window: string, default 'hamming'
-        The popular window types commonly used for shaping a signal in DSP for reducing
-        artifacts introduced in the time-frequency transformations.
-
-    Return:
-    -------
-    X: ndarray, (n_ch x n_win x binsize // 2)
-    """
-    if not np.isrealobj(x):
-        raise ValueError("x is not a real valued array")
-
-    if x.ndim == 1:
-        x = np.atleast_2d(x)
-
-    n_ch, n_samp = x.shape
-
-    n_win = None
-
-    binsize = binsize if win_idx is None else win_idx.shape[-1]
-    hopsize = hopsize if win_idx is None else abs(win_idx[0,-1] - win_idx[1,0])+1
-
-    args = [binsize, overlap_factor, hopsize, n_win]
-    if win_idx is None:
-        win_idx = create_time_idx(n_samp, args, create_indices=True)
-        # n_win = win_idx.shape[0]
-        # hopsize = 0
-    else:
-        create_time_idx(n_samp, args)
-
-    binsize, overlap_factor, hopsize, n_win = args
-
-    win_ = get_window(window, binsize)
-
-    length = hopsize if hopsize else binsize
     if overlap_factor in [0,1]:
         _x = np.zeros((n_ch, n_win * length))
     else:
@@ -170,48 +97,44 @@ def stft(x, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, window=
 
     _x[:,binsize//2:binsize//2+n_samp] = x
 
-    X = rfft(_x[:, win_idx] * win_, **kwargs)
+    # Process
+    win_ = get_window(window, binsize)
+    frames = stride_tricks.as_strided(_x, shape=(n_ch, n_win, binsize), strides=(_x.strides[0], _x.strides[1]*hopsize, _x.strides[1]))
+    X = rfft(frames * win_, **kwargs)
 
     return X
 
-def istft(X, nsamp=None, win_idx=None, binsize=1024, overlap_factor=.5, hopsize=None, **kwargs):
+def istft(X, nsamp=None, binsize=1024, overlap_factor=.5, hopsize=None, nfreqs=1, window='hamming'):
     """
     Inverse STFT.
 
     Parameters:
     -----------
-    X: ndarray, (n_ch x n_win x binsize // 2) or (n_ch x n_win x n_fr x binsize // 2)
+    X: ndarray, (n_ch, n_win, binsize // 2) or (n_ch, n_win, n_fr, binsize // 2)
 
     Return:
     -------
-    x: ndarray, (n_ch x n_fr x n_samp)
+    x: ndarray, (n_ch, n_fr, n_samp)
     """
+    # Sanity check
+    if X.ndim not in [3, 4]:
+        raise ValueError("The dimension of 'X' is not valid as an output from stft! Double check 'X'.")
 
     if X.ndim == 3: # add a n_fr dimension
         X = X[:,:,np.newaxis,:]
 
-    n_win = None
+    if X.shape[-1] != binsize:
+        raise ValueError("The 'binsize' must match the length of X.shape[-1].")
 
-    if win_idx is None:
-        binsize = binsize
-        hopsize = binsize * (1 - overlap_factor) if hopsize is None else hopsize
-    else:
-        binsize = win_idx.shape[-1]
-        hopsize = win_idx[1,0]
-        overlap_factor = hopsize / binsize
+    hopsize = binsize * (1 - overlap_factor) if hopsize is None else hopsize
 
+    # Process
     x_ = irfft(X, n=binsize, axis=-1, planner_effort='FFTW_ESTIMATE')
 
-    _nch, _nwin, _nfreqs, _bin = x_.shape
-
     # Reconstructing the signal using overlap-add
-    x = np.zeros((_nch, _nfreqs, _nwin * binsize))
-    overlap_factor = .5
-    for ix in range(_nwin):
-        jx = (1-overlap_factor) * ix
-        if int((jx+1)*binsize) <= binsize * _nwin * (1-overlap_factor):
-            x[:,:,int(jx*binsize):int((jx+1)*binsize)] += x_[:,ix,:,:]
+    x = overlap_add(x_, binsize=binsize, overlap_factor=overlap_factor)
 
+    # Clean up the signal
     if nsamp is not None:
         x = x[:,:,binsize//2:nsamp+binsize//2]
 
