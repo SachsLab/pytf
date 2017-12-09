@@ -25,14 +25,14 @@ class Counter(object):
 
 class Parallel(object):
     function = {}
-    def __init__(self, func, ins_shape=None, ins_dtype=None, out_shape=None, out_dtype=None,\
-                        nprocs=1, axis=0, flag=0, **kwargs):
+    def __init__(self, func, ins_shape=None, ins_dtype=None,\
+                       out_shape=None, out_dtype=None,\
+                       nprocs=1, axis=0, **kwargs):
         self.nprocs = nprocs
 
         self.f_name = func.__name__
         self.function[self.f_name] = func
 
-        self.flag = flag
         self.axis = axis
 
         self.ins_shape = ins_shape

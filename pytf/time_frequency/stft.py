@@ -4,7 +4,7 @@ from numpy.lib import stride_tricks
 from scipy.signal import get_window
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 
-from ..reconstruction.overlap import overlap_add
+from ..reconstruction.overlap import (overlap_add)
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
 # License : BSD (3-clause)
@@ -70,7 +70,7 @@ def stft(x, binsize=1024, overlap_factor=.5, hopsize=None, window='hamming', **k
 
     x = np.atleast_2d(x)
     n_ch, n_samp = x.shape
-    
+
     if hopsize is not None:
         _overlap_factor = hopsize / binsize
         if overlap_factor != _overlap_factor:

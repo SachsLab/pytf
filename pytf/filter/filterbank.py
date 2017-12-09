@@ -4,6 +4,7 @@ from __future__ import division
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
 # License : BSD (3-clause)
+import time
 import numpy as np
 from scipy.signal import get_window
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
@@ -27,7 +28,7 @@ class FilterBank(object):
     #              'binsize', 'overlap_factor', 'hopsize', 'decimate_by']
 
     def __init__(self, binsize=1024, decimate_by=1,
-                 bw=None, cf=None, foi=None, order=None, sfreq=None, \
+                 bw=None, cf=None, foi=None, order=None, sfreq=None, filt=True, \
                  **kw_pfunc):
 
         self.decimate_by = decimate_by
@@ -51,19 +52,22 @@ class FilterBank(object):
 
         # Create a prototype filter
         self._order = order
-        self.filts = self._create_prototype_filter(self.order, self.bandwidth/2., self.sfreq, self.binsize)
+        self.filts = self._create_prototype_filter(self.order, self.bandwidth/2., self.sfreq, self.binsize)\
+                        if filt else None
 
         # Initializing for multiprocessing
-        kw_pfunc = ['nprocs', 'in_shape', 'out_shape', '_fft_procs_kwargs']
-        self.nprocs = nprocs
-        self.pfunc = Parallel(self._fft_procs,
-                     nprocs=self.nprocs, axis=1,
-                     ins_shape= [(self.nch, self.nsamp), self.win_idx.shape], ins_dtype=[np.float32, np.int32],
-                     out_shape= (self.nch, self.win_idx.shape[0], self.nfreqs, self.binsize_), out_dtype=np.complex64,
-                     binsize=self.binsize_, filt=True, domain='time', window='hanning')
-
-    def kill(self, opt=None): # kill the multiprocess
-        self.pfunc.kill(opt=opt)
+        self.nprocs = 1
+    #     kw_pfunc = ['nprocs', 'in_shape', 'out_shape', '_fft_procs_kwargs']
+    #     self.pfunc = Parallel(self._fft_procs,
+    #                  nprocs=self.nprocs, axis=1,
+    #                  ins_shape=(self.nch, self.nsamp),
+    #                  ins_dtype=np.float32,
+    #                  out_shape=(self.nch, self.win_idx.shape[0], self.nfreqs, self.binsize_),
+    #                  out_dtype=np.complex64,
+    #                  binsize=self.binsize_, filt=True, domain='time', window='hanning')
+    #
+    # def kill(self, opt=None): # kill the multiprocess
+    #     self.pfunc.kill(opt=opt)
 
     def analysis(self, x, nsamp=None, hilbert=False, **kwargs):
         """
@@ -93,7 +97,10 @@ class FilterBank(object):
         nsamp //= self.decimate_by
 
         func = self.pfunc.result if self.nprocs > 1 else self._fft_procs
-        x_ = func(x, dtype=ndtype, **kwargs)
+        indices =  (self._idx1,
+                    self._idx2,
+                    self._fidx)
+        x_ = func(x, indices, dtype=ndtype, **kwargs)
 
         # Reconstructing the signal using overlap-add
         _x = overlap_add(x_, self.binsize_, overlap_factor=.5, dtype=ndtype)
@@ -106,7 +113,7 @@ class FilterBank(object):
         """
         return
 
-    def _fft_procs(self, x, window='hamming', filt=True, domain='freq', dtype=np.float32):
+    def _fft_procs(self, x, indices, window='hamming', domain='freq', dtype=np.float32):
         """
         FFT filtering using STFT on the signal.
 
@@ -115,10 +122,18 @@ class FilterBank(object):
         x: ndarray (nch x nsamp)
             The signal to be analyzed.
         """
+        t0 = time.time()
+        nch, nsamp = x.shape
         X = stft(x, binsize=self.binsize, window=window, axis=-1, planner_effort='FFTW_ESTIMATE') / self.decimate_by
-        X_ = np.zeros((self.nch, X.shape[1], self.nfreqs, self.binsize_//2), dtype=np.complex64)
+        X_ = np.zeros((nch, X.shape[1], self.nfreqs, self.binsize_//2), dtype=np.complex64)
 
-        X_[:,:,self.idx2,self.idx1] = X[:,:,self.idx1] * self.filts[self.fidx] if filt else X[:,:,self.idx1]
+        idx1 = indices[0]
+        idx2 = indices[1]
+        fidx = indices[2]
+        if self.filts is None:
+            X_[:,:,idx2,idx1] = X[:,:,idx1]
+        else:
+            X_[:,:,idx2,idx1] = X[:,:,idx1] * self.filts[fidx]
 
         if dtype == np.float32:
             _ifft = irfft
@@ -130,7 +145,9 @@ class FilterBank(object):
             return X_
 
         elif domain == 'time':
-            return _ifft(X_, n=self.binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
+            x_ = _ifft(X_, n=self.binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
+            print('time: {} ms'.format((time.time() - t0)*1E3))
+            return x_
 
     @property
     def foi(self):
@@ -177,7 +194,7 @@ class FilterBank(object):
         fois_ix_ = np.asarray(self.foi * self._int_phz, dtype=np.int64)
 
         # Get indices for filter coeffiecients
-        self.fidx = np.zeros((self.nfreqs, int(self.bandwidth * 2 * self._int_phz)), dtype=np.int64)
+        self._fidx = np.zeros((self.nfreqs, int(self.bandwidth * 2 * self._int_phz)), dtype=np.int64)
         cf0 = self.binsize // 2
         for ix, f_ix in enumerate(fois_ix_):
 
@@ -186,14 +203,14 @@ class FilterBank(object):
             else:
                 l_bound = cf0 - int(self._int_phz * self.bandwidth) - 1
 
-            diff = self.fidx[ix,:].shape[-1] - np.arange(l_bound, l_bound + self.bandwidth * 2 * self._int_phz).size
+            diff = self._fidx[ix,:].shape[-1] - np.arange(l_bound, l_bound + self.bandwidth * 2 * self._int_phz).size
 
-            self.fidx[ix,:] = np.arange(l_bound, l_bound + self.bandwidth * 2 * self._int_phz + diff)
+            self._fidx[ix,:] = np.arange(l_bound, l_bound + self.bandwidth * 2 * self._int_phz + diff)
 
         # Code 1: Does the same thing as below
         x = np.arange(0, int(self.bandwidth * 2 * self._int_phz))
         y = np.arange(0, self.nfreqs)
         index1, index2 = np.meshgrid(x, y)
         index1 += np.atleast_2d(fois_ix_[:,0]).T
-        self.idx1 = np.asarray(index1, dtype=np.int64)
-        self.idx2 = np.asarray(index2, dtype=np.int64)
+        self._idx1 = np.asarray(index1, dtype=np.int64)
+        self._idx2 = np.asarray(index2, dtype=np.int64)
