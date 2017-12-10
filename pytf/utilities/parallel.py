@@ -46,10 +46,14 @@ class Parallel(object):
             # Create all shared memory arrays used
             in1_base = sh.shared_ndarray_base(self.ins_shape[0], dtype=self.ins_dtype[0])
             in2_base = sh.shared_ndarray_base(self.ins_shape[1], dtype=self.ins_dtype[1])
+            in3_base = sh.shared_ndarray_base(self.ins_shape[2], dtype=self.ins_dtype[2])
+            in4_base = sh.shared_ndarray_base(self.ins_shape[3], dtype=self.ins_dtype[3])
             out_base = sh.shared_ndarray_base(self.out_shape, dtype=self.out_dtype)
 
             self.in1 = sh.ndarray_base_to_np(in1_base, self.ins_shape[0], dtype=self.ins_dtype[0])
             self.in2 = sh.ndarray_base_to_np(in2_base, self.ins_shape[1], dtype=self.ins_dtype[1])
+            self.in3 = sh.ndarray_base_to_np(in3_base, self.ins_shape[2], dtype=self.ins_dtype[2])
+            self.in4 = sh.ndarray_base_to_np(in4_base, self.ins_shape[3], dtype=self.ins_dtype[3])
             self.out = sh.ndarray_base_to_np(out_base, self.out_shape, dtype=self.out_dtype)
 
             # Create slices to reconstruct output
@@ -67,7 +71,8 @@ class Parallel(object):
             self.out_counter = [Counter() for n in range(self.nprocs)]
 
             self.procs = [mp.Process(target=self.process,
-                                     args=(n, self.in_counter, self.out_counter[n], in1_base, in2_base, out_base),
+                                     args=(n, self.in_counter, self.out_counter[n],
+                                           in1_base, in2_base, in3_base, in4_base, out_base),
                                      kwargs=kwargs)
                                      for n in range(self.nprocs)]
 
@@ -92,10 +97,12 @@ class Parallel(object):
             # Processes are not running
             pass
 
-    def process(self, proc_i, in_counter, out_counter, in1_base, in2_base, out_base, **kwargs):
+    def process(self, proc_i, in_counter, out_counter, in1_base, in2_base, in3_base, in4_base, out_base, **kwargs):
 
         in1 = sh.ndarray_base_to_np(in1_base, self.ins_shape[0], dtype=self.ins_dtype[0])
         in2 = sh.ndarray_base_to_np(in2_base, self.ins_shape[1], dtype=self.ins_dtype[1])
+        in3 = sh.ndarray_base_to_np(in3_base, self.ins_shape[2], dtype=self.ins_dtype[2])
+        in4 = sh.ndarray_base_to_np(in4_base, self.ins_shape[3], dtype=self.ins_dtype[3])
         out = sh.ndarray_base_to_np(out_base, self.out_shape, dtype=self.out_dtype)
 
         idx_ = [slice(None)] * 2
@@ -103,8 +110,9 @@ class Parallel(object):
 
         out_idx = [slice(None)] * len(self.out_shape)
         out_idx[self.axis] = self.slices[proc_i]
-
         tmp2 = in2[idx_]
+        tmp3 = in3[idx_]
+        tmp4 = in4[idx_]
         tmp1 = in1
 
         while in_counter.value() >= 0:
@@ -112,15 +120,16 @@ class Parallel(object):
                 time.sleep(0.001)
 
             if in_counter.value() >= 0:
-                out[out_idx] = self.function[self.f_name](tmp1, tmp2, **kwargs)
+                out[out_idx] = self.function[self.f_name](tmp1, tmp2, tmp3, tmp4, slices_idx=out_idx, **kwargs)
                 out_counter.increment()
 
     def result(self, *args, **kwargs):
         self.kwargs = kwargs
         if self.nprocs > 1:
-
-            self.in1[:,:] = args[0]
+            self.in1[:,:,:] = args[0]
             self.in2[:,:] = args[1]
+            self.in3[:,:] = args[2]
+            self.in4[:,:] = args[3]
             self.in_counter.increment()
             while np.any(np.asarray([x.value() for x in self.out_counter]) < self.in_counter.value()):
                 time.sleep(0.01)
