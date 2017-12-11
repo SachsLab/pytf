@@ -6,7 +6,7 @@ from __future__ import division
 # License : BSD (3-clause)
 import warnings
 import numpy as np
-from scipy.signal import get_window
+from scipy.signal import (get_window, group_delay)
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 
 from .filter import (create_filter, get_center_frequencies, get_frequency_of_interests, get_all_frequencies)
@@ -77,11 +77,10 @@ class FilterBank(object):
         self.binsize_ = self.binsize // self.decimate_by
 
         # Organize frequencies
+        self._sfreq = sample_rate
         self._center_freqs, self._bandwidth, self._freq_bands = get_all_frequencies(center_freqs, bandwidth, freq_bands)
 
         self._nfreqs = self.freq_bands.shape[0]
-
-        self._sfreq = sample_rate
         self._int_phz = self.binsize / self.sample_rate # interval per Hz
 
         # Create indices for efficiently filtering the signal
@@ -89,8 +88,11 @@ class FilterBank(object):
 
         # Create a prototype filter
         self._order = order
-        self.filts = self._create_prototype_filter(shift=True)\
+        self.filts = self._create_prototype_filter(shift=True, output='freq')\
                         if filt else None
+
+        self._delay = self.delay()
+        self._delay_ = self._delay // self.decimate_by
 
         # Initializing for multiprocessing
         self.nprocs = nprocs
@@ -99,7 +101,6 @@ class FilterBank(object):
         if list(self.kwargs.keys()) != ['ins_shape', 'out_shape']:
             if self.nprocs > 1:
                 warnings.warn("Must initialize 'ins_shape' and 'out_shape' using FilterBank.init_multiprocess(), if you want to use multiple processes!")
-
         else:
             self.init_multiprocess(**kwargs)
 
@@ -153,6 +154,8 @@ class FilterBank(object):
 
         func = self.pfunc.result if self.mprocs else self._fft_procs
         x_ = func(X, self._idx1, self._idx2, self._fidx, dtype=ndtype)
+        x_ = np.concatenate([x_[:,:,:,self._delay_:], x_[:,:,:,:self._delay_]], axis=-1)\
+                if self.filts is not None else x_
 
         # Reconstructing the signal using overlap-add
         _x = overlap_add(x_, self.binsize_, overlap_factor=.5, dtype=ndtype)
@@ -236,38 +239,44 @@ class FilterBank(object):
     def interval_per_hz(self):
         return self._int_phz
 
+    def delay(self):
+        filt = self._create_prototype_filter(output='time')
+        return int(np.mean(group_delay([filt,1])[1]))
+
     def _create_prototype_filter(self, **kwargs):
         """ Create the prototype filter, which is the only filter require for
         windowing in the frequency domain of the signal. This filter is a lowpass filter.
         """
-        return create_filter(self.order, self.bandwidth/2., self.sample_rate/2., self.binsize, **kwargs)[1]
+        tmp = create_filter(self.order, self.bandwidth/2., self.sample_rate/2., self.binsize, **kwargs)
+        if kwargs['output'] == 'time':
+            return tmp
+        elif kwargs['output'] == 'freq':
+            return tmp[1]
 
     def _get_indices_for_frequency_shifts(self):
         """ Get the indices for properly shifting the fft of signal to DC, and the indices
         for shifting the fft of signal back to the correct frequency indices for ifft.
         """
-        fois_ix_ = np.asarray(self.freq_bands * self.interval_per_hz, dtype=np.int64)
-
+        factor = .6
+        fois_ix_ = np.asarray(self.freq_bands * self.interval_per_hz, dtype=np.int32)
+        cf_ix_ = np.asarray(self.center_freqs * self.interval_per_hz, dtype=np.int32)
         # Get indices for filter coeffiecients
-        self._fidx = np.zeros((self.nfreqs, int(self.bandwidth * 2 * self.interval_per_hz)), dtype=np.int64)
+        self._fidx = np.zeros((self.nfreqs, int((self.bandwidth * factor) * 2 * self.interval_per_hz)), dtype=np.int32)
         cf0 = self.binsize // 2
         for ix, f_ix in enumerate(fois_ix_):
+            l_bound = cf0 - int(self.interval_per_hz * self.bandwidth * factor)
 
-            if f_ix[0] <= self.bandwidth:
-                l_bound = cf0 - int(self.interval_per_hz * self.bandwidth // 4) - 1
-            else:
-                l_bound = cf0 - int(self.interval_per_hz * self.bandwidth) - 1
-
-            diff = self._fidx[ix,:].shape[-1] - np.arange(l_bound, l_bound + self.bandwidth * 2 * self.interval_per_hz).size
-
-            self._fidx[ix,:] = np.arange(l_bound, l_bound + self.bandwidth * 2 * self.interval_per_hz + diff)
+            diff = self._fidx[ix,:].shape[-1] - np.arange(l_bound, l_bound + (self.bandwidth * factor) * 2 * self.interval_per_hz).size
+            self._fidx[ix,:] = np.arange(l_bound, l_bound + (self.bandwidth * factor) * 2 * self.interval_per_hz + diff)
 
         self._fidx = np.asarray(self._fidx, dtype=np.int32)
 
         # Code 1: Does the same thing as below
-        x = np.arange(0, int(self.bandwidth * 2 * self.interval_per_hz))
+        x = np.arange(0, int((self.bandwidth * factor) * 2 * self.interval_per_hz))
         y = np.arange(0, self.nfreqs)
         index1, index2 = np.meshgrid(x, y)
-        index1 += np.atleast_2d(fois_ix_[:,0]).T
+
+        # index1 += np.atleast_2d(fois_ix_[:,0]).T
+        index1 += (np.atleast_2d(cf_ix_) - int(self.interval_per_hz * self.bandwidth * factor))
         self._idx1 = np.asarray(index1, dtype=np.int32)
         self._idx2 = np.asarray(index2, dtype=np.int32)

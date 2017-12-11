@@ -127,16 +127,21 @@ def get_frequency_of_interests(cf, bw):
 
     return cf + bw
 
-def get_all_frequencies(center_frequencies=None, bandwidth=None, frequency_bands=None):
+def get_all_frequencies(cf=None, bw=None, fois=None):
     """ Ensures all frequencies, fois, cf, and bw.
     """
-    if (center_frequencies, bandwidth, frequency_bands) is (None, None, None):
+    if (cf, bw, fois) is (None, None, None):
         raise ValueError("Must enter one of the following arguments: 'cf', 'bw', 'fois.")
 
-    if frequency_bands is None:
-        frequency_bands = get_frequency_of_interests(center_frequencies, bandwidth)
+    if fois is None:
+        if cf.ndim == 1:
+            cf = np.atleast_2d(cf).T
+        else:
+            if cf.shape[1] == cf.size:
+                cf = cf.T
+        fois = get_frequency_of_interests(cf, bw)
 
-    if center_frequencies is None or bandwidth is None:
-        center_frequencies, bandwidth = get_center_frequencies(frequency_bands)
+    if cf is None or bw is None:
+        cf, bw = get_center_frequencies(fois)
 
-    return center_frequencies, bandwidth, frequency_bands
+    return cf, bw, fois
