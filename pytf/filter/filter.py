@@ -7,8 +7,7 @@ from scipy.signal import firwin
 # License : BSD (3-clause)
 
 def create_filter(order, cutoff, nyquist, N, ftype='fir', output='freq', shift=True):
-    """
-    Create a lowpass FIR filter. This function is meant to create only the prototype filter,
+    """ Create a lowpass FIR filter. This function is meant to create only the prototype filter,
     where highpass, bandpass, or bandstop can all be transformed from the lowpass filter.
 
     Parameters:
@@ -71,8 +70,7 @@ def create_filter(order, cutoff, nyquist, N, ftype='fir', output='freq', shift=T
         return h
 
 def get_center_frequencies(fois):
-    """
-    Convert an array of frequency bands into center frequencies and a bandwidth.
+    """ Convert an array of frequency bands into center frequencies and a bandwidth.
     TODO: Support for varying bandwidths.
     Parameters:
     -----------
@@ -98,8 +96,7 @@ def get_center_frequencies(fois):
     return cf, float(bw)
 
 def get_frequency_of_interests(cf, bw):
-    """
-    Convert an array of center frequencies and a bandwidth into an array of frequency bands.
+    """ Convert an array of center frequencies and a bandwidth into an array of frequency bands.
     TODO: Support for varying bandwidths.
     Parameters:
     -----------
@@ -131,8 +128,7 @@ def get_frequency_of_interests(cf, bw):
     return cf + bw
 
 def get_all_frequencies(center_frequencies=None, bandwidth=None, frequency_bands=None):
-    """
-    Ensures all frequencies, fois, cf, and bw.
+    """ Ensures all frequencies, fois, cf, and bw.
     """
     if (center_frequencies, bandwidth, frequency_bands) is (None, None, None):
         raise ValueError("Must enter one of the following arguments: 'cf', 'bw', 'fois.")

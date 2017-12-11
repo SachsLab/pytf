@@ -10,8 +10,7 @@ from ..reconstruction.overlap import (overlap_add)
 # License : BSD (3-clause)
 
 def _check_winsize(binsize, overlap_factor=None, hopsize=None):
-    """
-    Ensure all parameters for defining the windowing size of the signal aligns.
+    """ Ensure all parameters for defining the windowing size of the signal aligns.
 
     Parameters:
     -----------
@@ -43,8 +42,7 @@ def _check_winsize(binsize, overlap_factor=None, hopsize=None):
     return binsize, overlap_factor, hopsize
 
 def stft(x, binsize=1024, overlap_factor=.5, hopsize=None, window='hamming', **kwargs):
-    """
-    STFT, Short-Term Fourier Transform.
+    """ STFT, Short-Term Fourier Transform.
 
     Parameters:
     -----------
@@ -56,6 +54,15 @@ def stft(x, binsize=1024, overlap_factor=.5, hopsize=None, window='hamming', **k
 
     overlap_factor: float
         The percentage of overlapping between consecutive windows.
+
+    hopsize: int
+        The sample size required to jump to the next row.
+
+    window: str (default: 'hamming')
+        The window used to create overlapping slices of the time domain signal.
+
+    kwargs:
+        The key-word arguments for rfft.
 
     Return:
     -------
@@ -104,13 +111,21 @@ def stft(x, binsize=1024, overlap_factor=.5, hopsize=None, window='hamming', **k
 
     return X
 
-def istft(X, nsamp=None, binsize=1024, overlap_factor=.5, hopsize=None, nfreqs=1, window='hamming'):
-    """
-    Inverse STFT.
+def istft(X, nsamp=None, binsize=1024, overlap_factor=.5, hopsize=None):
+    """ Inverse STFT.
 
     Parameters:
     -----------
     X: ndarray, (n_ch, n_win, binsize // 2) or (n_ch, n_win, n_fr, binsize // 2)
+
+    binsize: int
+        Window size for processing FFT on.
+
+    overlap_factor: float
+        The percentage of overlapping between consecutive windows.
+
+    hopsize: int
+        The sample size required to jump to the next row.
 
     Return:
     -------
