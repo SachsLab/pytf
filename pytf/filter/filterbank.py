@@ -62,31 +62,37 @@ class FilterBank(object):
     kwargs:
         The key-word arguments for initializing multiprocess. See self.init_multiprocess().
     """
-    def __init__(self, mprocs=False, nch=1, nwin=9, binsize=1024, decimate_by=1, nprocs=1, domain='time', \
+    def __init__(self, mprocs=False, nch=1, nsamp=2**14, binsize=2**10, decimate_by=1, nprocs=1, domain='time', \
                  bandwidth=None, center_freqs=None, freq_bands=None, order=None, sample_rate=None, \
                  hilbert=False, **kwargs):
 
-        self.decimate_by = decimate_by
+        # Pre-defined Parameters
+        self._factor = .6
+        _overlap_factor = 0.5
+
+        # Filter Output Parameters
         self.hilbert = hilbert
         self.domain = domain
-        self._factor = .6
 
-        self.nch = nch
-        # Create indices for overlapping window
-        self.overlap_factor = 0.5
-        self.binsize = binsize
-        self.nwin = nwin
-        self._nsamp = int(((self.nwin - 1) * self.overlap_factor) * self.binsize)
+        # Signal Parameters
+        self._nch = nch
+        self._decimate_by = decimate_by
+        self._nsamp = nsamp
+        # self._nsamp = int(((self._nwin - 1) * _overlap_factor) * self._binsize)
 
-        # The decimated sample size
-        self.binsize_ = self.binsize // self.decimate_by
+        # Overlap-Window Parameters
+        self._binsize = binsize
+        self._nwin = int((self.nsamp / self._binsize) / _overlap_factor + 1)
 
-        # Organize frequencies
-        self._sfreq = sample_rate
+        # Frequency Parameters
+        self._sample_rate = sample_rate
         self._center_freqs, self._bandwidth, self._freq_bands = get_all_frequencies(center_freqs, bandwidth, freq_bands)
 
         self._nfreqs = self.freq_bands.shape[0]
-        self._int_phz = self.binsize / self.sample_rate # interval per Hz
+        self._interval_per_hz = self._binsize / self.sample_rate # interval per Hz
+
+        # The decimated sample size
+        self._binsize_ = self._binsize // self.decimate_by
 
         # Create indices for efficiently filtering the signal
         self._get_indices_for_frequency_shifts()
@@ -102,11 +108,11 @@ class FilterBank(object):
         self._nprocs = nprocs
         self._mprocs = True if self.nprocs > 1 else mprocs
 
-        self.init_multiprocess(ins_shape=[(self.nch, self.nwin, self.binsize//2 + 1),\
+        self.init_multiprocess(ins_shape=[(self.nch, self._nwin, self._binsize//2 + 1),\
                                           (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz)),
                                           (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz)),
                                           (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz))],\
-                                out_shape=(self.nch, self.nwin, self.nfreqs, self.binsize // self.decimate_by), **kwargs)
+                                out_shape=(self.nch, self._nwin, self.nfreqs, self._binsize // self.decimate_by))
 
     def init_multiprocess(self, ins_shape=None, out_shape=None,
                                 ins_dtype=[np.complex64, np.int32, np.int32, np.int32],
@@ -164,7 +170,7 @@ class FilterBank(object):
         nch, nsamp = x.shape
         nsamp //= self.decimate_by
 
-        X = stft(x, binsize=self.binsize, window=window, axis=-1, \
+        X = stft(x, binsize=self._binsize, window=window, axis=-1, \
                     planner_effort='FFTW_ESTIMATE') / self.decimate_by
 
         x_ = self._pfunc.result(X, self._idx1, self._idx2, self._fidx)
@@ -172,8 +178,8 @@ class FilterBank(object):
                 if self.filts is not None else x_
 
         # Reconstructing the signal using overlap-add
-        _x = overlap_add(x_, self.binsize_, overlap_factor=.5, dtype=ndtype)
-        return _x[:,:,self.binsize_//2:nsamp+self.binsize_//2]
+        _x = overlap_add(x_, self._binsize_, overlap_factor=.5, dtype=ndtype)
+        return _x[:,:,self._binsize_//2:nsamp+self._binsize_//2]
 
     def synthesis(self, x, **kwargs):
         """ TODO: Reconstruct the signal from the analysis bank.
@@ -208,7 +214,7 @@ class FilterBank(object):
             The ndarray type of the signal output.
         """
         nch, nwin, nsamp = X.shape
-        X_ = np.zeros((nch, nwin, nfreqs, self.binsize_//2), dtype=np.complex64)
+        X_ = np.zeros((nch, nwin, nfreqs, self._binsize_//2), dtype=np.complex64)
         X_[:,:,idx2,idx1] = X[:,:,idx1] * filts[fidx]
 
         if dtype == np.float32:
@@ -221,7 +227,7 @@ class FilterBank(object):
             return X_
 
         elif self.domain == 'time':
-            return _ifft(X_[slices_idx], n=self.binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
+            return _ifft(X_[slices_idx], n=self._binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
 
     def delayed_samples(self):
         filt = self._create_prototype_filter(output='time')
@@ -231,7 +237,7 @@ class FilterBank(object):
         """ Create the prototype filter, which is the only filter require for
         windowing in the frequency domain of the signal. This filter is a lowpass filter.
         """
-        tmp = create_filter(self.order, self.bandwidth/2., self.sample_rate/2., self.binsize, **kwargs)
+        tmp = create_filter(self.order, self.bandwidth/2., self.sample_rate/2., self._binsize, **kwargs)
         if kwargs['output'] == 'time':
             return tmp
         elif kwargs['output'] == 'freq':
@@ -246,7 +252,7 @@ class FilterBank(object):
 
         # Get indices for filter coeffiecients
         self._fidx = np.zeros((self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz)), dtype=np.int32)
-        cf0 = self.binsize // 2
+        cf0 = self._binsize // 2
         for ix, f_ix in enumerate(fois_ix_):
             l_bound = cf0 - int(self.interval_per_hz * self.bandwidth * self._factor)
 
@@ -282,7 +288,7 @@ class FilterBank(object):
 
     @property
     def sample_rate(self):
-        return self._sfreq
+        return self._sample_rate
 
     @property
     def order(self):
@@ -290,7 +296,7 @@ class FilterBank(object):
 
     @property
     def interval_per_hz(self):
-        return self._int_phz
+        return self._interval_per_hz
 
     @property
     def nprocs(self):
@@ -307,3 +313,15 @@ class FilterBank(object):
     @property
     def delay_(self):
         return self._delay_
+
+    @property
+    def nch(self):
+        return self._nch
+
+    @property
+    def decimate_by(self):
+        return self._decimate_by
+
+    @property
+    def nsamp(self):
+        return self._nsamp
