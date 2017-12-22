@@ -12,7 +12,7 @@ from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 from .filter import (create_filter, get_center_frequencies, get_frequency_of_interests, get_all_frequencies)
 from ..reconstruction.overlap import (overlap_add)
 from ..time_frequency.stft import (_check_winsize, stft)
-from ..utilities.parallel import Parallel
+from ..utilities.parallel import (Parallel, ParallelDummy)
 
 def _is_uniform_distributed_cf(cf):
     """ Check if the provided center frequencies are uniformly distributed.
@@ -62,16 +62,21 @@ class FilterBank(object):
     kwargs:
         The key-word arguments for initializing multiprocess. See self.init_multiprocess().
     """
-    def __init__(self, binsize=1024, decimate_by=1, nprocs=1, domain='time', \
+    def __init__(self, mprocs=False, nch=1, nwin=9, binsize=1024, decimate_by=1, nprocs=1, domain='time', \
                  bandwidth=None, center_freqs=None, freq_bands=None, order=None, sample_rate=None, \
-                 filt=True, hilbert=False, \
-                 **kwargs):
+                 hilbert=False, **kwargs):
 
         self.decimate_by = decimate_by
         self.hilbert = hilbert
         self.domain = domain
+        self._factor = .6
+
+        self.nch = nch
         # Create indices for overlapping window
+        self.overlap_factor = 0.5
         self.binsize = binsize
+        self.nwin = nwin
+        self._nsamp = int(((self.nwin - 1) * self.overlap_factor) * self.binsize)
 
         # The decimated sample size
         self.binsize_ = self.binsize // self.decimate_by
@@ -88,23 +93,24 @@ class FilterBank(object):
 
         # Create a prototype filter
         self._order = order
-        self.filts = self._create_prototype_filter(shift=True, output='freq')\
-                        if filt else None
+        self.filts = self._create_prototype_filter(shift=True, output='freq')
 
-        self._delay = self.delay()
-        self._delay_ = self._delay // self.decimate_by
+        self._delay = self.delayed_samples()
+        self._delay_ = self.delay // self.decimate_by
 
         # Initializing for multiprocessing
-        self.nprocs = nprocs
-        self.mprocs = False
-        self.kwargs = kwargs
-        if list(self.kwargs.keys()) != ['ins_shape', 'out_shape']:
-            if self.nprocs > 1:
-                warnings.warn("Must initialize 'ins_shape' and 'out_shape' using FilterBank.init_multiprocess(), if you want to use multiple processes!")
-        else:
-            self.init_multiprocess(**kwargs)
+        self._nprocs = nprocs
+        self._mprocs = True if self.nprocs > 1 else mprocs
 
-    def init_multiprocess(self, ins_shape=None, out_shape=None):
+        self.init_multiprocess(ins_shape=[(self.nch, self.nwin, self.binsize//2 + 1),\
+                                          (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz)),
+                                          (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz)),
+                                          (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz))],\
+                                out_shape=(self.nch, self.nwin, self.nfreqs, self.binsize // self.decimate_by), **kwargs)
+
+    def init_multiprocess(self, ins_shape=None, out_shape=None,
+                                ins_dtype=[np.complex64, np.int32, np.int32, np.int32],
+                                out_dtype=np.float32):
         """ Initializing multiprocessing used in this filter bank class.
 
         Parameters:
@@ -115,26 +121,35 @@ class FilterBank(object):
         out_shape: tuple (default: None)
             The shape of the output array, the filtered signal (nch, nfreqs, nwin x binsize_).
         """
-        self.mprocs = True
-        ins_dtype = [np.complex64, np.int32, np.int32, np.int32]
-        ndtype = np.complex64 if self.hilbert else np.float32
-        self.pfunc = Parallel(self._fft_procs,
-                     nprocs = self.nprocs, axis = 2,
-                     ins_shape = ins_shape,
-                     out_shape = out_shape,
-                     ins_dtype = ins_dtype,
-                     out_dtype = ndtype,
-                     dtype = ndtype)
+        ndtype = np.complex64 if self.hilbert else out_dtype
+        if self.mprocs:
+            self._pfunc = Parallel(
+                            self._fft_procs, nprocs=self.nprocs, axis=2,
+                            ins_shape = ins_shape,
+                            out_shape = out_shape,
+                            ins_dtype = ins_dtype,
+                            out_dtype = ndtype,
+                            dtype = ndtype,
+                            filts = self.filts,
+                            nfreqs = self.nfreqs
+                        )
+        else:
+            warnings.warn("The multiprocessing is disabled! To enable multiprocessing, "+\
+                        "specify 'ins_shape' and 'out_shape' for preallocating shared memory.")
 
+            self._pfunc = ParallelDummy(self._fft_procs,
+                                dtype=ndtype,
+                                filts = self.filts,
+                                nfreqs = self.nfreqs
+                            )
 
     def kill(self, opt=None): # kill the multiprocess
         """ Killing all the multiprocessing processes.
         """
-        self.pfunc.kill(opt=opt)
+        self._pfunc.kill(opt=opt)
 
     def analysis(self, x, window='hamming'):
-        """
-        Generate the analysis bank.
+        """ Generate the analysis bank.
 
         Parameters:
         -----------
@@ -152,9 +167,8 @@ class FilterBank(object):
         X = stft(x, binsize=self.binsize, window=window, axis=-1, \
                     planner_effort='FFTW_ESTIMATE') / self.decimate_by
 
-        func = self.pfunc.result if self.mprocs else self._fft_procs
-        x_ = func(X, self._idx1, self._idx2, self._fidx, dtype=ndtype)
-        x_ = np.concatenate([x_[:,:,:,self._delay_:], x_[:,:,:,:self._delay_]], axis=-1)\
+        x_ = self._pfunc.result(X, self._idx1, self._idx2, self._fidx)
+        x_ = np.concatenate([x_[:,:,:,self.delay_:], x_[:,:,:,:self.delay_]], axis=-1)\
                 if self.filts is not None else x_
 
         # Reconstructing the signal using overlap-add
@@ -166,7 +180,8 @@ class FilterBank(object):
         """
         return
 
-    def _fft_procs(self, X, idx1, idx2, fidx, slices_idx=[slice(None)]*4, dtype=np.float32):
+    def _fft_procs(self, X, idx1, idx2, fidx, filts=None, nfreqs=None, \
+                        slices_idx=[slice(None)]*4, dtype=np.float32):
         """ FFT filtering using STFT on the signal.
 
         Paramters:
@@ -193,11 +208,8 @@ class FilterBank(object):
             The ndarray type of the signal output.
         """
         nch, nwin, nsamp = X.shape
-        X_ = np.zeros((nch, nwin, self.nfreqs, self.binsize_//2), dtype=np.complex64)
-        if self.filts is None:
-            X_[:,:,idx2,idx1] = X[:,:,idx1]
-        else:
-            X_[:,:,idx2,idx1] = X[:,:,idx1] * self.filts[fidx]
+        X_ = np.zeros((nch, nwin, nfreqs, self.binsize_//2), dtype=np.complex64)
+        X_[:,:,idx2,idx1] = X[:,:,idx1] * filts[fidx]
 
         if dtype == np.float32:
             _ifft = irfft
@@ -210,6 +222,47 @@ class FilterBank(object):
 
         elif self.domain == 'time':
             return _ifft(X_[slices_idx], n=self.binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
+
+    def delayed_samples(self):
+        filt = self._create_prototype_filter(output='time')
+        return int(np.mean(group_delay([filt,1])[1]))
+
+    def _create_prototype_filter(self, **kwargs):
+        """ Create the prototype filter, which is the only filter require for
+        windowing in the frequency domain of the signal. This filter is a lowpass filter.
+        """
+        tmp = create_filter(self.order, self.bandwidth/2., self.sample_rate/2., self.binsize, **kwargs)
+        if kwargs['output'] == 'time':
+            return tmp
+        elif kwargs['output'] == 'freq':
+            return tmp[1]
+
+    def _get_indices_for_frequency_shifts(self):
+        """ Get the indices for properly shifting the fft of signal to DC, and the indices
+        for shifting the fft of signal back to the correct frequency indices for ifft.
+        """
+        fois_ix_ = np.asarray(self.freq_bands * self.interval_per_hz, dtype=np.int32)
+        cf_ix_ = np.asarray(self.center_freqs * self.interval_per_hz, dtype=np.int32)
+
+        # Get indices for filter coeffiecients
+        self._fidx = np.zeros((self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz)), dtype=np.int32)
+        cf0 = self.binsize // 2
+        for ix, f_ix in enumerate(fois_ix_):
+            l_bound = cf0 - int(self.interval_per_hz * self.bandwidth * self._factor)
+
+            diff = self._fidx[ix,:].shape[-1] - np.arange(l_bound, l_bound + (self.bandwidth * self._factor) * 2 * self.interval_per_hz).size
+            self._fidx[ix,:] = np.arange(l_bound, l_bound + (self.bandwidth * self._factor) * 2 * self.interval_per_hz + diff)
+
+        self._fidx = np.asarray(self._fidx, dtype=np.int32)
+
+        # Code 1: Does the same thing as below
+        x = np.arange(0, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz))
+        y = np.arange(0, self.nfreqs)
+        index1, index2 = np.meshgrid(x, y)
+
+        index1 += (np.atleast_2d(cf_ix_) - int(self.interval_per_hz * self.bandwidth * self._factor))
+        self._idx1 = np.asarray(index1, dtype=np.int32)
+        self._idx2 = np.asarray(index2, dtype=np.int32)
 
     @property
     def freq_bands(self):
@@ -239,44 +292,18 @@ class FilterBank(object):
     def interval_per_hz(self):
         return self._int_phz
 
+    @property
+    def nprocs(self):
+        return self._nprocs
+
+    @property
+    def mprocs(self):
+        return self._mprocs
+
+    @property
     def delay(self):
-        filt = self._create_prototype_filter(output='time')
-        return int(np.mean(group_delay([filt,1])[1]))
+        return self._delay
 
-    def _create_prototype_filter(self, **kwargs):
-        """ Create the prototype filter, which is the only filter require for
-        windowing in the frequency domain of the signal. This filter is a lowpass filter.
-        """
-        tmp = create_filter(self.order, self.bandwidth/2., self.sample_rate/2., self.binsize, **kwargs)
-        if kwargs['output'] == 'time':
-            return tmp
-        elif kwargs['output'] == 'freq':
-            return tmp[1]
-
-    def _get_indices_for_frequency_shifts(self):
-        """ Get the indices for properly shifting the fft of signal to DC, and the indices
-        for shifting the fft of signal back to the correct frequency indices for ifft.
-        """
-        factor = .6
-        fois_ix_ = np.asarray(self.freq_bands * self.interval_per_hz, dtype=np.int32)
-        cf_ix_ = np.asarray(self.center_freqs * self.interval_per_hz, dtype=np.int32)
-        # Get indices for filter coeffiecients
-        self._fidx = np.zeros((self.nfreqs, int((self.bandwidth * factor) * 2 * self.interval_per_hz)), dtype=np.int32)
-        cf0 = self.binsize // 2
-        for ix, f_ix in enumerate(fois_ix_):
-            l_bound = cf0 - int(self.interval_per_hz * self.bandwidth * factor)
-
-            diff = self._fidx[ix,:].shape[-1] - np.arange(l_bound, l_bound + (self.bandwidth * factor) * 2 * self.interval_per_hz).size
-            self._fidx[ix,:] = np.arange(l_bound, l_bound + (self.bandwidth * factor) * 2 * self.interval_per_hz + diff)
-
-        self._fidx = np.asarray(self._fidx, dtype=np.int32)
-
-        # Code 1: Does the same thing as below
-        x = np.arange(0, int((self.bandwidth * factor) * 2 * self.interval_per_hz))
-        y = np.arange(0, self.nfreqs)
-        index1, index2 = np.meshgrid(x, y)
-
-        # index1 += np.atleast_2d(fois_ix_[:,0]).T
-        index1 += (np.atleast_2d(cf_ix_) - int(self.interval_per_hz * self.bandwidth * factor))
-        self._idx1 = np.asarray(index1, dtype=np.int32)
-        self._idx2 = np.asarray(index2, dtype=np.int32)
+    @property
+    def delay_(self):
+        return self._delay_

@@ -23,13 +23,39 @@ class Counter(object):
         with self.lock:
             return self.val.value
 
+class ParallelDummy(object):
+    """
+    This class is created to wrap a function such that it has the same iterface as the Parallel class.
+    """
+    function = {}
+
+    def __init__(self, func, *args, **kwargs):
+
+        self.f_name = func.__name__
+        self.function[self.f_name] = func
+        self.kwargs = kwargs
+
+        self.del_opt = None
+
+    def __del__(self):
+        self.kill(opt=self.del_opt)
+
+    def kill(self, opt=None):
+        if opt is not None:
+            print("The object is deleted off the memory.")
+
+        del self
+
+    def result(self, *args, **kwargs):
+        return self.function[self.f_name](*args, **self.kwargs)
+
 class Parallel(object):
     function = {}
     def __init__(self, func, ins_shape=None, ins_dtype=None,\
                        out_shape=None, out_dtype=None,\
                        nprocs=1, axis=0, **kwargs):
         self.nprocs = nprocs
-
+        self.kwargs = kwargs
         self.f_name = func.__name__
         self.function[self.f_name] = func
 
@@ -124,7 +150,7 @@ class Parallel(object):
                 out_counter.increment()
 
     def result(self, *args, **kwargs):
-        self.kwargs = kwargs
+
         if self.nprocs > 1:
             self.in1[:,:,:] = args[0]
             self.in2[:,:] = args[1]
@@ -136,7 +162,7 @@ class Parallel(object):
             return self.out
 
         else:
-            return self.function[self.f_name](*args, **kwargs)
+            return self.function[self.f_name](*args, **self.kwargs)
 
     @staticmethod
     def check_nprocs():
