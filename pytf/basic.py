@@ -1,4 +1,7 @@
 import numpy as np
+# Authors : David C.C. Lu <davidlu89@gmail.com>
+#
+# License : BSD (3-clause)
 
 def reshape_data(data):
     """

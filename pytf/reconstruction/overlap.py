@@ -1,5 +1,8 @@
 import numpy as np
 import six
+# Authors : David C.C. Lu <davidlu89@gmail.com>
+#
+# License : BSD (3-clause)
 def overlap_add(x, binsize, overlap_factor=.5, dtype=np.float32):
 
     _nfreqs = 1
