@@ -4,12 +4,11 @@ from __future__ import division
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
 # License : BSD (3-clause)
-import warnings
 import numpy as np
 from scipy.signal import (get_window, group_delay)
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 
-from .filter import (create_filter, get_center_frequencies, get_frequency_of_interests, get_all_frequencies)
+from .filter import (create_filter)
 from ..reconstruction.overlap import (overlap_add)
 from ..time_frequency.stft import (_check_winsize, stft)
 from ..utilities.parallel import (Parallel, ParallelDummy)
@@ -58,13 +57,10 @@ class FilterBank(object):
     hilbert: bool (default: False)
         If False, the output signal is real.
         If True, the output signal is analytical (real and imaginary).
-
-    kwargs:
-        The key-word arguments for initializing multiprocess. See self.init_multiprocess().
     """
-    def __init__(self, mprocs=False, nch=1, nsamp=2**14, binsize=2**10, decimate_by=1, nprocs=1, domain='time', \
+    def __init__(self, nch=1, nsamp=2**14, binsize=2**10, decimate_by=1, \
                  bandwidth=None, center_freqs=None, freq_bands=None, order=None, sample_rate=None, \
-                 hilbert=False, **kwargs):
+                 hilbert=False, domain='time', nprocs=1, mprocs=False):
 
         # Pre-defined Parameters
         self._factor = .6
@@ -78,7 +74,6 @@ class FilterBank(object):
         self._nch = nch
         self._decimate_by = decimate_by
         self._nsamp = nsamp
-        # self._nsamp = int(((self._nwin - 1) * _overlap_factor) * self._binsize)
 
         # Overlap-Window Parameters
         self._binsize = binsize
@@ -86,7 +81,7 @@ class FilterBank(object):
 
         # Frequency Parameters
         self._sample_rate = sample_rate
-        self._center_freqs, self._bandwidth, self._freq_bands = get_all_frequencies(center_freqs, bandwidth, freq_bands)
+        self._center_freqs, self._bandwidth, self._freq_bands = self.get_all_frequencies(center_freqs, bandwidth, freq_bands)
 
         self._nfreqs = self.freq_bands.shape[0]
         self._interval_per_hz = self._binsize / self.sample_rate # interval per Hz
@@ -108,46 +103,20 @@ class FilterBank(object):
         self._nprocs = nprocs
         self._mprocs = True if self.nprocs > 1 else mprocs
 
-        self.init_multiprocess(ins_shape=[(self.nch, self._nwin, self._binsize//2 + 1),\
-                                          (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz)),
-                                          (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz)),
-                                          (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz))],\
-                                out_shape=(self.nch, self._nwin, self.nfreqs, self._binsize // self.decimate_by))
-
-    def init_multiprocess(self, ins_shape=None, out_shape=None,
-                                ins_dtype=[np.complex64, np.int32, np.int32, np.int32],
-                                out_dtype=np.float32):
-        """ Initializing multiprocessing used in this filter bank class.
-
-        Parameters:
-        ----------
-        ins_shape: tuple (default: None)
-            The shape of the input array, STFT of x.
-
-        out_shape: tuple (default: None)
-            The shape of the output array, the filtered signal (nch, nfreqs, nwin x binsize_).
-        """
-        ndtype = np.complex64 if self.hilbert else out_dtype
-        if self.mprocs:
-            self._pfunc = Parallel(
-                            self._fft_procs, nprocs=self.nprocs, axis=2,
-                            ins_shape = ins_shape,
-                            out_shape = out_shape,
-                            ins_dtype = ins_dtype,
-                            out_dtype = ndtype,
-                            dtype = ndtype,
-                            filts = self.filts,
-                            nfreqs = self.nfreqs
-                        )
-        else:
-            warnings.warn("The multiprocessing is disabled! To enable multiprocessing, "+\
-                        "specify 'ins_shape' and 'out_shape' for preallocating shared memory.")
-
-            self._pfunc = ParallelDummy(self._fft_procs,
-                                dtype=ndtype,
-                                filts = self.filts,
-                                nfreqs = self.nfreqs
-                            )
+        ndtype = np.complex64 if self.hilbert else np.float32
+        self._pfunc = Parallel(
+                        self._fft_procs, nprocs=self.nprocs, axis=2,
+                        ins_shape = [(self.nch, self._nwin, self._binsize//2 + 1),
+                                    (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz)),
+                                    (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz)),
+                                    (self.nfreqs, int((self.bandwidth * self._factor) * 2 * self.interval_per_hz))],
+                        out_shape=(self.nch, self._nwin, self.nfreqs, self._binsize // self.decimate_by),
+                        ins_dtype = [np.complex64, np.int32, np.int32, np.int32],
+                        out_dtype = ndtype,
+                        dtype = ndtype,
+                        filts = self.filts,
+                        nfreqs = self.nfreqs
+                    ) if self.mprocs else ParallelDummy(self._fft_procs, dtype=ndtype, filts=self.filts, nfreqs=self.nfreqs)
 
     def kill(self, opt=None): # kill the multiprocess
         """ Killing all the multiprocessing processes.
@@ -230,6 +199,8 @@ class FilterBank(object):
             return _ifft(X_[slices_idx], n=self._binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
 
     def delayed_samples(self):
+        """ The group delay from the prototype filter.
+        """
         filt = self._create_prototype_filter(output='time')
         return int(np.mean(group_delay([filt,1])[1]))
 
@@ -237,11 +208,8 @@ class FilterBank(object):
         """ Create the prototype filter, which is the only filter require for
         windowing in the frequency domain of the signal. This filter is a lowpass filter.
         """
-        tmp = create_filter(self.order, self.bandwidth/2., self.sample_rate/2., self._binsize, **kwargs)
-        if kwargs['output'] == 'time':
-            return tmp
-        elif kwargs['output'] == 'freq':
-            return tmp[1]
+        return create_filter(self.order, self.bandwidth/2., self.sample_rate/2.,\
+                             self._binsize, **kwargs)[1]
 
     def _get_indices_for_frequency_shifts(self):
         """ Get the indices for properly shifting the fft of signal to DC, and the indices
@@ -269,6 +237,103 @@ class FilterBank(object):
         index1 += (np.atleast_2d(cf_ix_) - int(self.interval_per_hz * self.bandwidth * self._factor))
         self._idx1 = np.asarray(index1, dtype=np.int32)
         self._idx2 = np.asarray(index2, dtype=np.int32)
+
+    @staticmethod
+    def get_center_frequencies(fois):
+        """ Convert an array of frequency bands into center frequencies and a bandwidth.
+        TODO: Support for varying bandwidths.
+
+        Parameters:
+        -----------
+        fois: ndarray, (nfreq x 2)
+            An array of frequency bands of interents. Each row consists of upper and lower
+            bound of frequencies. The unit for frequencies must be consistant with the sampling rate.
+
+        Return:
+        -------
+        cf: ndarray, (nfreqs x 1)
+            An array of center frequencies corresponding to the fois.
+
+        bw: float
+            The bandwidth. The width between the upper and lower cutoff frequencies.
+        """
+        foi = np.asarray(fois)
+        if fois.shape[0] == 2 and fois.shape[1] != 2:
+            fois = fois.T
+
+        cf = np.atleast_2d(fois.mean(axis=-1)).T
+        bw = np.diff(fois, axis=-1)
+        bw = bw[0] if np.diff(bw) else bw.mean()
+        return cf, float(bw)
+
+    @staticmethod
+    def get_frequency_bands(cf, bw):
+        """ Convert an array of center frequencies and a bandwidth into an array of frequency bands.
+        TODO: Support for varying bandwidths.
+
+        Parameters:
+        -----------
+        cf: ndarray, (nfreqs x 1)
+            An array of center frequencies corresponding to the fois.
+
+        bw: float
+            The bandwidth. The width between the upper and lower cutoff frequencies.
+
+        Returns:
+        --------
+        fois: ndarray, (nfreq x 2)
+            An array of frequency bands of interents. Each row consists of upper and lower
+            bound of frequencies. The unit for frequencies must be consistant with the sampling rate.
+        """
+        cf = np.asarray(cf)
+        bw = np.asarray(bw)
+        if cf.ndim == 1:
+            cf = np.atleast_2d(cf).T
+        else:
+            if cf.shape[1] == cf.size:
+                cf = cf.T
+
+        bw = bw * np.ones((cf.size, 2))
+        bw[:,0] *= -.5
+        bw[:,1] *= .5
+
+        return cf + bw
+
+    @staticmethod
+    def get_all_frequencies(cf=None, bw=None, fois=None):
+        """ Ensures all frequencies, fois, cf, and bw.
+
+        Parameters:
+        -----------
+        cf: ndarray, (nfreqs x 1)
+            An array of center frequencies corresponding to the fois.
+
+        bw: float
+            The bandwidth. The width between the upper and lower cutoff frequencies.
+
+        fois: ndarray, (nfreq x 2)
+            An array of frequency bands of interents. Each row consists of upper and lower
+            bound of frequencies. The unit for frequencies must be consistant with the sampling rate.
+
+        Return:
+        --------
+        cf, bw, fois
+        """
+        if (cf, bw, fois) is (None, None, None):
+            raise ValueError("Must enter one of the following arguments: 'cf', 'bw', 'fois.")
+
+        if fois is None:
+            if cf.ndim == 1:
+                cf = np.atleast_2d(cf).T
+            else:
+                if cf.shape[1] == cf.size:
+                    cf = cf.T
+            fois = FilterBank.get_frequency_bands(cf, bw)
+
+        if cf is None or bw is None:
+            cf, bw = FilterBank.get_center_frequencies(fois)
+
+        return cf, bw, fois
 
     @property
     def freq_bands(self):

@@ -4,7 +4,7 @@ from numpy.lib import stride_tricks
 from scipy.signal import get_window
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
 
-from ..reconstruction.overlap import (overlap_add)
+from ..reconstruction.overlap import overlap_add
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
 # License : BSD (3-clause)
