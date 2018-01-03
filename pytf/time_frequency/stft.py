@@ -70,7 +70,7 @@ def stft(x, binsize=1024, overlap_factor=.5, hopsize=None, window='hamming', **k
     """
     # Sanity check
     if not np.isrealobj(x):
-        raise ValueError("x is not a real valued array")
+        raise ValueError("x is not a real valued array.")
 
     if x.ndim > 2:
         raise ValueError("The dimension of the ndarray must be less than or equal to 2!")
@@ -106,7 +106,11 @@ def stft(x, binsize=1024, overlap_factor=.5, hopsize=None, window='hamming', **k
 
     # Process
     win_ = get_window(window, binsize)
-    frames = stride_tricks.as_strided(_x, shape=(n_ch, n_win, binsize), strides=(_x.strides[0], _x.strides[1]*hopsize, _x.strides[1]))
+    frames = stride_tricks.as_strided(
+                            _x,
+                            shape=(n_ch, n_win, binsize),
+                            strides=(_x.strides[0], _x.strides[1]*hopsize, _x.strides[1])
+                        )
     X = rfft(frames * win_, **kwargs)
 
     return X

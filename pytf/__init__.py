@@ -1,4 +1,4 @@
-from .time_frequency.spectrogram import *
+from .time_frequency.spectrogram import Spectrogram
 from .filter.filterbank import FilterBank
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
@@ -8,4 +8,5 @@ __version__ = '0.1'
 
 __all__ = [
     'FilterBank',
+    'Spectrogram'
 ]
