@@ -21,6 +21,8 @@ def _plot_spectrogram(spectra, axs=None, figsize=None, title=None, cmap='jet',
     spec_, freq = logscale_normalization(spectra, factor=1, srate=srate)
     if norm is 'db':
         spec_ = 20. * np.log10(np.abs(spec_)/10e-6) # amplitude to decibel
+    else:
+        spec_ = np.abs(spec_)
 
     tbins_, fbins_ = spec_.shape
 
@@ -50,7 +52,8 @@ def _plot_spectrogram(spectra, axs=None, figsize=None, title=None, cmap='jet',
         _ax = axs
         _fig = _ax.figure
 
-    ima = _ax.imshow(np.transpose(spec), origin="lower", aspect="auto", cmap=cmap, **kwargs)
+    ima = _ax.imshow(spec.T, origin="lower", aspect="auto", cmap=cmap,
+                                         vmin=spec_.min(), vmax=spec_.max(), **kwargs)
 
     if title is not None:
         _ax.set_title(title, fontsize=fontsize['title'])

@@ -9,20 +9,44 @@ class Spectrogram(object):
     """ This class represent a time series waveform into spectrogram.
     Note: At the moment, the class only used a Fourier based method.
 
-    nch:
+    nch: int
+        The number of channels of the processing signal.
 
-    nsamp:
+    nsamp: int
+        The sample size of the processing signal.
 
+    sample_rate: int
+        Sampling of the input signal.
+
+    binsize: int (default: 1024)
+        The number of samples used for each analysis window for STFT.
+
+    hopsize: int
+        The number of sample it takes to hop between rows.
+
+    overlap_factor: float (default: 0.5)
+        The ratio of overlapping between chuncks.
     """
-    def __init__(self, nch=1, nsamp=2**11, binsize=2**14, sample_rate=None):
+    def __init__(self, nch=1, nsamp=2**11, sample_rate=None, binsize=2**14, hopsize=None, overlap_factor=.5):
 
-        self._overlap_factor = .5
+        self._overlap_factor = overlap_factor
         self._binsize = binsize
-        self._hopsize = None
+        self._hopsize = hopsize
         self._sample_rate = sample_rate
         self._nsamp = nsamp
 
     def analysis(self, x, axis=-1):
+        """
+        Processing to get the spectra.
+
+        Parameters:
+        -----------
+        x: ndarray, (nch x nsamp)
+            The input signal.
+
+        axis: int (default: -1)
+            The processing axis.
+        """
         self._spectra = stft(x, binsize = self.binsize,
                                 overlap_factor = self.overlap_factor,
                                 hopsize = self.hopsize,
@@ -34,7 +58,7 @@ class Spectrogram(object):
     def synthesis(self, X):
         return
 
-    def plot_spectra(self, ch=None, axs=None, tlim=None, flim=None, figsize=None,
+    def plot_spectra(self, ch=None, axs=None, tlim=None, flim=None, figsize=None, norm='db',
                            title=None, label=False, xlabel=False, ylabel=False,
                            fontsize={'ticks': 15, 'axis': 15, 'title': 20}):
 
@@ -55,7 +79,7 @@ class Spectrogram(object):
             _plot_spectrogram(spec_[i,:,:],
                 axs=ax, title=title, cmap='jet',
                 srate=self.sample_rate, nsamp=self.nsamp,
-                label=label, xlabel=xlabel, ylabel=ylabel, tlim=tlim, flim=flim, norm='db',
+                label=label, xlabel=xlabel, ylabel=ylabel, tlim=tlim, flim=flim, norm=norm,
                 fontsize=fontsize,
             )
 
