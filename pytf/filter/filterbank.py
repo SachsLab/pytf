@@ -4,19 +4,28 @@ from __future__ import division
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
 # License : BSD (3-clause)
+import logging
+
 import numpy as np
 from scipy.signal import (get_window, group_delay)
 from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
+
+import matplotlib.pyplot as plt
 
 from .filter import (create_filter)
 from ..reconstruction.overlap import (overlap_add)
 from ..time_frequency.stft import (_check_winsize, stft)
 from ..utilities.parallel import (Parallel, ParallelDummy)
+from ..viz.filter_plot import (_plot_filter)
 
 def _is_uniform_distributed_cf(cf):
     """ Check if the provided center frequencies are uniformly distributed.
     """
     return np.any(np.diff(np.diff(cf))!=0)
+
+logging.basicConfig(level=logging.INFO)
+# logger = logging.getLogger(__name__)
+# logger.info('Start reading database')
 
 class FilterBank(object):
     """ Create a filter bank object for signal processing.
@@ -60,8 +69,11 @@ class FilterBank(object):
     """
     def __init__(self, nch=1, nsamp=2**14, binsize=2**10, decimate_by=1, \
                  bandwidth=None, center_freqs=None, freq_bands=None, order=None, sample_rate=None, \
-                 hilbert=False, domain='time', nprocs=1, mprocs=False):
+                 hilbert=False, domain='time', nprocs=1, mprocs=False,
+                 logger=None):
 
+        self.logger = logging.getLogger("%s" % self.__class__)
+        self.logger.info("Creating the FilterBank class.")
         # Pre-defined Parameters
         self._factor = .6
         _overlap_factor = 0.5
@@ -94,7 +106,8 @@ class FilterBank(object):
 
         # Create a prototype filter
         self._order = order
-        self.filts = self._create_prototype_filter(shift=True, output='freq')
+        self._filts = self._create_prototype_filter(shift=True, output='freq')[1]
+        self.logger.info("Created the prototype filter.")
 
         self._delay = self.delayed_samples()
         self._delay_ = self.delay // self.decimate_by
@@ -102,6 +115,9 @@ class FilterBank(object):
         # Initializing for multiprocessing
         self._nprocs = nprocs
         self._mprocs = True if self.nprocs > 1 else mprocs
+
+        if self._mprocs:
+            self.logger.info("Enabled multiprocessing.")
 
         ndtype = np.complex64 if self.hilbert else np.float32
         self._pfunc = Parallel(
@@ -114,9 +130,17 @@ class FilterBank(object):
                         ins_dtype = [np.complex64, np.int32, np.int32, np.int32],
                         out_dtype = ndtype,
                         dtype = ndtype,
-                        filts = self.filts,
+                        filts = self._filts,
                         nfreqs = self.nfreqs
-                    ) if self.mprocs else ParallelDummy(self._fft_procs, dtype=ndtype, filts=self.filts, nfreqs=self.nfreqs)
+                    ) if self.mprocs else ParallelDummy(self._fft_procs, dtype=ndtype, filts=self._filts, nfreqs=self.nfreqs)
+
+        self.logger.info("Initialized FilterBank.")
+
+    # def __str__(self):
+    #     return self
+    #
+    # def __repr__(self):
+    #     return self
 
     def kill(self, opt=None): # kill the multiprocess
         """ Killing all the multiprocessing processes.
@@ -144,7 +168,7 @@ class FilterBank(object):
 
         x_ = self._pfunc.result(X, self._idx1, self._idx2, self._fidx)
         x_ = np.concatenate([x_[:,:,:,self.delay_:], x_[:,:,:,:self.delay_]], axis=-1)\
-                if self.filts is not None else x_
+                if self._filts is not None else x_
 
         # Reconstructing the signal using overlap-add
         _x = overlap_add(x_, self._binsize_, overlap_factor=.5, dtype=ndtype)
@@ -201,15 +225,59 @@ class FilterBank(object):
     def delayed_samples(self):
         """ The group delay from the prototype filter.
         """
-        filt = self._create_prototype_filter(output='time')
+        filt = self._create_prototype_filter(output='time')[1]
         return int(np.mean(group_delay([filt,1])[1]))
+
+    def plot_filter(self, xlim=None, ylim=None,
+                    label=False, xlabel=False, ylabel=False,
+                    plot_group_delay=None):
+        """ Visualize the prototype filter.
+        """
+        xlabel = True if label else xlabel
+        ylabel = True if label else ylabel
+
+        _w, _filts = self._create_prototype_filter(shift=True, output='freq')
+        _fig, _ax = plt.subplots(2, 1, figsize=(8,6), sharex=True)
+        _ax[0].plot(_w, np.abs(_filts))
+        _ax[1].plot(_w, np.angle(_filts))
+        if xlim is not None:
+            _ax[0].set_xlim(xlim)
+            _ax[1].set_xlim(xlim)
+
+        if xlabel:
+            _ax[1].set_xlabel('Frequencies [Hz]')
+        if ylabel:
+            _ax[0].set_ylabel('Magnitude')
+            _ax[1].set_ylabel('Phases [rad]')
+
+        if plot_group_delay is not None:
+            _filt = self._create_prototype_filter(output='time')[1]
+            _w, _gd = group_delay([_filt,1])
+            _w *= (self.sample_rate / (2*np.pi))
+
+            _fig1, _ax1 = plt.subplots(1,1,figsize=(8,3))
+            _ax1.plot(_w, _gd)
+
+            if xlim is not None:
+                _ax1.set_xlim([0, xlim[-1]])
+
+            _ax1.set_ylim([0, _gd.max()*1.25])
+
+            if xlabel:
+                _ax1.set_xlabel('Frequencies [Hz]')
+            if ylabel:
+                _ax1.set_ylabel('Number of Samples')
+
+            return [_fig, _fig1]
+        else:
+            return _fig
 
     def _create_prototype_filter(self, **kwargs):
         """ Create the prototype filter, which is the only filter require for
         windowing in the frequency domain of the signal. This filter is a lowpass filter.
         """
         return create_filter(self.order, self.bandwidth/2., self.sample_rate/2.,\
-                             self._binsize, **kwargs)[1]
+                             self._binsize, **kwargs)
 
     def _get_indices_for_frequency_shifts(self):
         """ Get the indices for properly shifting the fft of signal to DC, and the indices

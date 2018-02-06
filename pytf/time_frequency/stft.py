@@ -142,7 +142,7 @@ def istft(X, nsamp=None, binsize=1024, overlap_factor=.5, hopsize=None):
     if X.ndim == 3: # add a n_fr dimension
         X = X[:,:,np.newaxis,:]
 
-    if X.shape[-1] != binsize:
+    if (X.shape[-1]-1)*2 != binsize:
         raise ValueError("The 'binsize' must match the length of X.shape[-1].")
 
     hopsize = binsize * (1 - overlap_factor) if hopsize is None else hopsize

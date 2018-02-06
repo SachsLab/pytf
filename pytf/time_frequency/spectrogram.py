@@ -35,6 +35,9 @@ class Spectrogram(object):
         self._sample_rate = sample_rate
         self._nsamp = nsamp
 
+        self._istft = None
+        self._stft = None
+
     def analysis(self, x, axis=-1):
         """
         Processing to get the spectra.
@@ -47,22 +50,38 @@ class Spectrogram(object):
         axis: int (default: -1)
             The processing axis.
         """
-        self._spectra = stft(x, binsize = self.binsize,
+        self._stft = stft(x, binsize = self.binsize,
                                 overlap_factor = self.overlap_factor,
                                 hopsize = self.hopsize,
                                 window = 'hanning',
                                 planner_effort='FFTW_ESTIMATE', axis=axis)
 
-        return self._spectra
+        return self._stft
 
-    def synthesis(self, X):
-        return
+    def synthesis(self, X=None):
+        if X is None:
+            if self._stft is None:
+                raise ValueError("'analysis' method has yet to run.")
+            else:
+                X = self._stft
+
+        self._istft = istft(X, nsamp=None,
+                               binsize=self.binsize,
+                               overlap_factor=self.overlap_factor,
+                               hopsize=self.hopsize)
+        return self._istft
+
+    def reconstruction_error(self, x):
+        if self._istft is None:
+            return self._istft - x
+        else:
+            raise ValueError("'synthsis' method has yet to run.")
 
     def plot_spectra(self, ch=None, axs=None, tlim=None, flim=None, figsize=None, norm='db',
                            title=None, label=False, xlabel=False, ylabel=False,
                            fontsize={'ticks': 15, 'axis': 15, 'title': 20}):
 
-        spec_ = self._spectra[ch,:,:][np.newaxis,:,:] if ch is not None else self._spectra
+        spec_ = self._stft[ch,:,:][np.newaxis,:,:] if ch is not None else self._stft
         nch, tbins, fbins = spec_.shape
 
         # Build Figures
