@@ -16,7 +16,7 @@ from .filter import (create_filter)
 from ..reconstruction.overlap import (overlap_add)
 from ..time_frequency.stft import (_check_winsize, stft)
 from ..utilities.parallel import (Parallel, ParallelDummy)
-from ..viz.filter_plot import (_plot_filter)
+# from ..viz.filter_plot import (_plot_filter)
 
 def _is_uniform_distributed_cf(cf):
     """ Check if the provided center frequencies are uniformly distributed.
