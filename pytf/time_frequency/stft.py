@@ -2,7 +2,11 @@ import numpy as np
 from numpy.lib import stride_tricks
 
 from scipy.signal import get_window
-from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
+
+try:
+    import pyfftw.interfaces.numpy_fft as fft
+except ImportError:
+    import scipy.fftpack as fft
 
 from ..reconstruction.overlap import overlap_add
 # Authors : David C.C. Lu <davidlu89@gmail.com>
@@ -111,7 +115,7 @@ def stft(x, binsize=1024, overlap_factor=.5, hopsize=None, window='hamming', **k
                             shape=(n_ch, n_win, binsize),
                             strides=(_x.strides[0], _x.strides[1]*hopsize, _x.strides[1])
                         )
-    X = rfft(frames * win_, **kwargs)
+    X = fft.rfft(frames * win_, **kwargs)
 
     return X
 
@@ -148,7 +152,7 @@ def istft(X, nsamp=None, binsize=1024, overlap_factor=.5, hopsize=None):
     hopsize = binsize * (1 - overlap_factor) if hopsize is None else hopsize
 
     # Process
-    x_ = irfft(X, n=binsize, axis=-1, planner_effort='FFTW_ESTIMATE')
+    x_ = fft.irfft(X, n=binsize, axis=-1, planner_effort='FFTW_ESTIMATE')
 
     # Reconstructing the signal using overlap-add
     x = overlap_add(x_, binsize=binsize, overlap_factor=overlap_factor)

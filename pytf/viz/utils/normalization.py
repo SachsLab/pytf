@@ -1,5 +1,8 @@
 import numpy as np
-from pyfftw.interfaces.numpy_fft import (fftfreq)
+try:
+    import pyfftw.interfaces.numpy_fft as fft
+except ImportError:
+    import scipy.fftpack as fft
 
 def logscale_normalization(spectra, srate=1., factor=20.):
     t_bins, f_bins = spectra.shape
@@ -17,7 +20,7 @@ def logscale_normalization(spectra, srate=1., factor=20.):
             spectra_[:,i] = np.sum(spectra[:,scale[i]:], axis=1)
 
     # list center freq of bins
-    allfreqs = np.abs(fftfreq(f_bins*2, 1./srate)[:f_bins+1])
+    allfreqs = np.abs(fft.fftfreq(f_bins*2, 1./srate)[:f_bins+1])
 
     freqs = []
     for i in range(0, len(scale)):

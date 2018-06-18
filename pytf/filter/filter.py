@@ -1,7 +1,11 @@
 
 import numpy as np
-import pyfftw.interfaces.numpy_fft as fft
 from scipy.signal import firwin
+
+try:
+    import pyfftw.interfaces.numpy_fft as fft
+except ImportError:
+    import scipy.fftpack as fft
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
 # License : BSD (3-clause)

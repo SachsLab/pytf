@@ -8,7 +8,11 @@ import logging
 
 import numpy as np
 from scipy.signal import (get_window, group_delay)
-from pyfftw.interfaces.numpy_fft import (rfft, irfft, ifft, fftfreq)
+
+try:
+    import pyfftw.interfaces.numpy_fft as fft
+except ImportError:
+    import scipy.fftpack as fft
 
 import matplotlib.pyplot as plt
 
@@ -211,10 +215,10 @@ class FilterBank(object):
         X_[:,:,idx2,idx1] = X[:,:,idx1] * filts[fidx]
 
         if dtype == np.float32:
-            _ifft = irfft
+            _ifft = fft.irfft
         else:
             X_[:,:,:,1:] *= 2
-            _ifft = ifft
+            _ifft = fft.ifft
 
         if self.domain == 'freq':
             return X_
