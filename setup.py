@@ -1,5 +1,10 @@
+import __future__
 from setuptools import setup
 import os
+
+# Authors : David C.C. Lu <davidlu89@gmail.com>
+#
+# License : MIT
 
 setup(
     name = "pytf",
@@ -22,5 +27,11 @@ setup(
         'Programming Language :: Python :: 3.4',
         'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
-        'Topic :: Scientific/Engineering']
+        'Topic :: Software Development',
+        'Topic :: Scientific/Engineering',
+        'Operating System :: Microsoft :: Windows',
+        'Operating System :: POSIX',
+        'Operating System :: Unix',
+        'Operating System :: MacOS'],
+        platforms='any'
 )
