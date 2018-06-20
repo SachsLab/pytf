@@ -11,7 +11,7 @@ A [Binder](https://mybinder.org) of the pytf development will be provided [here]
 * [pyfftw](https://github.com/pyFFTW/pyFFTW): A Python wrapper around [FFTW](http://www.fftw.org), the speedy FFT library.
 
 ## Cite this work
-At the moment, the paper is still under review with the [PLOS ONE](http://journals.plos.org/plosone/s/journal-information) journal. Until the paper is accepted to journal, you can contact me for acknowledgements.
+At the moment, the paper is still under review. Until the paper is accepted to journal, you can contact me for acknowledgements.
 <!-- If you use this code in your project, please cite [Lu et al. 2018]: -->
 <!-- @article {lu2018,
     author = {David Chao-Chia Lu, Chadwick Boulay, Adrian D.C. Chan, Adam J. Sachs},
