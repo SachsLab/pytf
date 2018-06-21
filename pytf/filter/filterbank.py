@@ -4,7 +4,7 @@ from __future__ import division
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
 # License : BSD (3-clause)
-import logging
+# import logging
 
 import numpy as np
 from scipy.signal import (get_window, group_delay)
@@ -27,7 +27,7 @@ def _is_uniform_distributed_cf(cf):
     """
     return np.any(np.diff(np.diff(cf))!=0)
 
-logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 # logger = logging.getLogger(__name__)
 # logger.info('Start reading database')
 
@@ -76,8 +76,8 @@ class FilterBank(object):
                  hilbert=False, domain='time', nprocs=1, mprocs=False,
                  logger=None):
 
-        self.logger = logging.getLogger("%s" % self.__class__)
-        self.logger.info("Creating the FilterBank class.")
+        # self.logger = logging.getLogger("%s" % self.__class__)
+        # self.logger.info("Creating the FilterBank class.")
         # Pre-defined Parameters
         self._factor = .6
         _overlap_factor = 0.5
@@ -111,7 +111,7 @@ class FilterBank(object):
         # Create a prototype filter
         self._order = order
         self._filts = self._create_prototype_filter(shift=True, output='freq')[1]
-        self.logger.info("Created the prototype filter.")
+        # self.logger.info("Created the prototype filter.")
 
         self._delay = self.delayed_samples()
         self._delay_ = self.delay // self.decimate_by
@@ -120,8 +120,8 @@ class FilterBank(object):
         self._nprocs = nprocs
         self._mprocs = True if self.nprocs > 1 else mprocs
 
-        if self._mprocs:
-            self.logger.info("Enabled multiprocessing.")
+        # if self._mprocs:
+        #     self.logger.info("Enabled multiprocessing.")
 
         ndtype = np.complex64 if self.hilbert else np.float32
         self._pfunc = Parallel(
@@ -138,7 +138,7 @@ class FilterBank(object):
                         nfreqs = self.nfreqs
                     ) if self.mprocs else ParallelDummy(self._fft_procs, dtype=ndtype, filts=self._filts, nfreqs=self.nfreqs)
 
-        self.logger.info("Initialized FilterBank.")
+        # self.logger.info("Initialized FilterBank.")
 
     # def __str__(self):
     #     return self
