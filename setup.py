@@ -9,7 +9,7 @@ import os
 setup(
     name = "pytf",
     version = 0.1,
-    packages = ['pytf', 'pytf.viz', 'pytf.viz.utils', 'pytf.filter', 'pytf.reconstruction', 'pytf.time_frequency', 'pytf.utilities'],
+    packages = ['pytf', 'pytf.core', 'pytf.viz', 'pytf.viz.utils', 'pytf.filter', 'pytf.reconstruction', 'pytf.time_frequency', 'pytf.utilities'],
     install_requires=['numpy', 'scipy'],
     author = "David Lu",
     author_email = "davidlu89@gmail.com",
