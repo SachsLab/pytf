@@ -7,7 +7,7 @@ from __future__ import division
 # import logging
 
 import numpy as np
-from scipy.signal import (get_window, group_delay)
+from scipy.signal import group_delay
 
 try:
     import pyfftw.interfaces.numpy_fft as fft
@@ -16,10 +16,10 @@ except ImportError:
 
 import matplotlib.pyplot as plt
 
-from .filter import (create_filter)
-from ..reconstruction.overlap import (overlap_add)
+from .filter import create_filter
+from ..reconstruction.overlap import overlap_add
 from ..time_frequency.stft import (_check_winsize, stft)
-from ..utilities.parallel import (Parallel, ParallelDummy)
+from ..utilities.process import (Parallel, Serial)
 # from ..viz.filter_plot import (_plot_filter)
 
 def _is_uniform_distributed_cf(cf):
@@ -136,7 +136,7 @@ class FilterBank(object):
                         dtype = ndtype,
                         filts = self._filts,
                         nfreqs = self.nfreqs
-                    ) if self.mprocs else ParallelDummy(self._fft_procs, dtype=ndtype, filts=self._filts, nfreqs=self.nfreqs)
+                    ) if self.mprocs else Serial(self._fft_procs, dtype=ndtype, filts=self._filts, nfreqs=self.nfreqs)
 
         # self.logger.info("Initialized FilterBank.")
 

@@ -22,7 +22,7 @@ class Counter(object):
         with self.lock:
             return self.val.value
 
-class ParallelDummy(object):
+class Serial(object):
     """
     This class is created to wrap a function such that it has the same iterface as the Parallel class.
     """
