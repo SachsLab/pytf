@@ -61,3 +61,4 @@ target/
 .DS_Store
 data/figs/
 data/output/
+.ipynb_checkpoints/
