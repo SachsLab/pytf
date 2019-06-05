@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 
 from .filter import create_filter
 from ..reconstruction.overlap import overlap_add
-from ..time_frequency.stft import (_check_winsize, stft)
+from ..time_frequency.stft import (_check_winsize, stft, istft)
 from ..utilities.process import (Parallel, Serial)
 # from ..viz.filter_plot import (_plot_filter)
 
@@ -73,7 +73,7 @@ class FilterBank(object):
     """
     def __init__(self, nch=1, nsamp=2**14, binsize=2**10, decimate_by=1, \
                  bandwidth=None, center_freqs=None, freq_bands=None, order=None, sample_rate=None, \
-                 hilbert=False, domain='time', nprocs=1, mprocs=False,
+                 hilbert=False, domain='time', zero_phase=False, nprocs=1, mprocs=False,
                  logger=None):
 
         # self.logger = logging.getLogger("%s" % self.__class__)
@@ -85,6 +85,7 @@ class FilterBank(object):
         # Filter Output Parameters
         self.hilbert = hilbert
         self.domain = domain
+        self.zero_phase = zero_phase
 
         # Signal Parameters
         self._nch = nch
@@ -112,8 +113,12 @@ class FilterBank(object):
         self._order = order
         self._filts = self._create_prototype_filter(shift=True, output='freq')[1]
         # self.logger.info("Created the prototype filter.")
-
         self._delay = self.delayed_samples()
+
+        if self.zero_phase:
+            self._filts *= self._filts
+            self._delay = 0
+
         self._delay_ = self.delay // self.decimate_by
 
         # Initializing for multiprocessing
@@ -151,7 +156,7 @@ class FilterBank(object):
         """
         self._pfunc.kill(opt=opt)
 
-    def analysis(self, x, window='hamming'):
+    def analysis(self, x, window='hamming', mode=None, **kwargs):
         """ Generate the analysis bank.
 
         Parameters:
@@ -167,16 +172,32 @@ class FilterBank(object):
         nch, nsamp = x.shape
         nsamp //= self.decimate_by
 
-        X = stft(x, binsize=self._binsize, window=window, axis=-1, \
-                    planner_effort='FFTW_ESTIMATE') / self.decimate_by
+        X = stft(x, binsize=self._binsize, hopsize=self._binsize//2, window=window, axis=-1, mode=mode) / self.decimate_by
 
-        x_ = self._pfunc.result(X, self._idx1, self._idx2, self._fidx)
-        x_ = np.concatenate([x_[:,:,:,self.delay_:], x_[:,:,:,:self.delay_]], axis=-1)\
-                if self._filts is not None else x_
+        # X = stft(x, binsize=self._binsize, hopsize=self._binsize//2, window=window, axis=-1, \
+        #             planner_effort='FFTW_ESTIMATE') / self.decimate_by
 
-        # Reconstructing the signal using overlap-add
-        _x = overlap_add(x_, self._binsize_, overlap_factor=.5, dtype=ndtype)
-        return _x[:,:,self._binsize_//2:nsamp+self._binsize_//2]
+        # x_ = self._pfunc.result(X, self._idx1, self._idx2, self._fidx)
+        # x_ = np.concatenate([x_[:,:,:,self.delay_:], x_[:,:,:,:self.delay_]], axis=-1)\
+        #         if (self._filts is not None and not self.zero_phase) else x_
+        #
+        # # Reconstructing the signal using overlap-add
+        # _x = overlap_add(x_, self._binsize_, overlap_factor=.5, dtype=ndtype)
+        # return _x[:,:,:nsamp]
+
+        if self.mprocs:
+            x_ = self._pfunc.result(X, self._idx1, self._idx2, self._fidx)
+            x_ = np.concatenate([x_[:,:,:,self.delay_:], x_[:,:,:,:self.delay_]], axis=-1)\
+                    if (self._filts is not None and not self.zero_phase) else x_
+
+            # Reconstructing the signal using overlap-add
+            _x = overlap_add(x_, self._binsize_, overlap_factor=.5, dtype=ndtype)
+            return _x[:,:,:nsamp]
+        else:
+            _X = np.concatenate([np.zeros_like(X) for ix in range(self.nfreqs)], axis=0)
+            _X[self._idx2,:,self._idx1] = (X[0,:,self._idx1].T * self._filts[self._fidx].T).T
+            self._delay_ = None
+            return istft(_X, self._binsize_, self._binsize_//2, mode=mode, delay=self.delay_, axis=-1, n=self._binsize_)
 
     def synthesis(self, x, **kwargs):
         """ TODO: Reconstruct the signal from the analysis bank.
@@ -224,7 +245,7 @@ class FilterBank(object):
             return X_
 
         elif self.domain == 'time':
-            return _ifft(X_[slices_idx], n=self._binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
+            return _ifft(X_, n=self._binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
 
     def delayed_samples(self):
         """ The group delay from the prototype filter.

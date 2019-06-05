@@ -1,8 +1,27 @@
 import numpy as np
 import six
+from ..core import frame
 # Authors : David C.C. Lu <davidlu89@gmail.com>
 #
 # License : BSD (3-clause)
+# def ola(x, binsize, hopsize, dtype):
+#     result = np.zeros(())
+#     return
+
+def ola(x, binsize, hopsize, n=None):
+    overlap_factor = binsize / hopsize
+
+    nsamps = int((x.size//x.shape[0]) / overlap_factor + binsize)
+    result_xi = np.zeros((x.shape[0], nsamps+binsize), dtype=x.dtype)
+    r_ = frame(result_xi, binsize, hopsize)
+    for i in range(x.shape[1]):
+        r_[:,i, :] += x[:,i, :]
+
+    if n is None:
+        return result_xi
+    else:
+        return result_xi[:,:n]
+
 def overlap_add(x, binsize, overlap_factor=.5, dtype=np.float32):
 
     _nfreqs = 1
