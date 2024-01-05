@@ -224,7 +224,7 @@ class FilterBank(object):
             return X_
 
         elif self.domain == 'time':
-            return _ifft(X_[slices_idx], n=self._binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
+            return _ifft(X_[tuple(slices_idx)], n=self._binsize_, axis=-1, planner_effort='FFTW_ESTIMATE')
 
     def delayed_samples(self):
         """ The group delay from the prototype filter.
